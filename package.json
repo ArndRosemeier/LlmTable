@@ -1,0 +1,17 @@
+{
+  "name": "llm-table",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "modules/conversation",
+    "modules/poker",
+    "apps/server",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w @llm-table/server",
+    "dev:web": "npm run dev -w @llm-table/web",
+    "build": "npm run build -w @llm-table/shared && npm run build -w @llm-table/conversation && npm run build -w @llm-table/poker && npm run build -w @llm-table/server && npm run build -w @llm-table/web",
+    "typecheck": "npm run typecheck -w @llm-table/shared && npm run typecheck -w @llm-table/conversation && npm run typecheck -w @llm-table/poker && npm run typecheck -w @llm-table/server && npm run typecheck -w @llm-table/web"
+  }
+}
