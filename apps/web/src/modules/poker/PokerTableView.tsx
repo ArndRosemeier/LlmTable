@@ -236,8 +236,11 @@ export function PokerTableView({
           const pos = seatPosition(p.seatIndex, state.participants.length);
           const active = state.activeSpeakerId === p.id;
           const ps = poker?.players.find((x) => x.participantId === p.id);
-          const eliminated = ps?.status === "out" || (ps !== undefined && ps.stack <= 0);
-          const inHand = ps?.status === "active" || ps?.status === "allIn";
+          // Only status "out" means busted from the table. All-in players have
+          // stack 0 while the hand is still live.
+          const eliminated = ps?.status === "out";
+          const allIn = ps?.status === "allIn";
+          const inHand = ps?.status === "active" || allIn;
           const potShare = ps?.contributed ?? 0;
           const showCards =
             ps &&
@@ -250,6 +253,7 @@ export function PokerTableView({
             "seat",
             active ? "seat-active" : "",
             eliminated ? "seat-out" : "",
+            allIn ? "seat-all-in" : "",
           ]
             .filter(Boolean)
             .join(" ");
@@ -270,11 +274,12 @@ export function PokerTableView({
               <span className="seat-kind">
                 {eliminated
                   ? "Out"
-                  : ps
-                    ? `${ps.stack} chips`
-                    : p.kind}{" "}
-                {!eliminated && ps?.status === "folded" ? "· folded" : ""}
-                {!eliminated && ps?.status === "allIn" ? "· all-in" : ""}
+                  : allIn
+                    ? "All-in"
+                    : ps
+                      ? `${ps.stack} chips`
+                      : p.kind}
+                {!eliminated && ps?.status === "folded" ? " · folded" : ""}
               </span>
               {inHand && potShare > 0 ? (
                 <span className="seat-pot-marker" title="In the pot this hand">

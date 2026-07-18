@@ -123,8 +123,8 @@ select {
 
 .field input,
 .field textarea,
-.model-select select,
 .model-filter,
+.model-select-trigger,
 .human-input input {
   border: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.25);
@@ -136,16 +136,117 @@ select {
 
 .field input:focus,
 .field textarea:focus,
-.model-select select:focus,
 .model-filter:focus,
+.model-select-trigger:focus,
 .human-input input:focus {
   border-color: var(--accent);
 }
 
 .model-select {
+  position: relative;
+  width: 100%;
+}
+
+.model-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.model-select-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.model-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-select-placeholder {
+  color: var(--muted);
+}
+
+.model-select-chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+.model-select-dropdown {
+  position: absolute;
+  z-index: 40;
+  left: 0;
+  right: 0;
+  top: calc(100% + 0.25rem);
   display: grid;
   gap: 0.35rem;
+  padding: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #1a2430;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.model-select-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(18rem, 50vh);
+  overflow: auto;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.model-select-empty {
+  padding: 0.55rem 0.65rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.model-select-option {
+  display: grid;
+  gap: 0.1rem;
   width: 100%;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+  cursor: pointer;
+}
+
+.model-select-option-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-select-option-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-select-option-focus,
+.model-select-option:hover {
+  background: rgba(224, 168, 74, 0.14);
+}
+
+.model-select-option-active {
+  background: rgba(224, 168, 74, 0.22);
 }
 
 .btn {
@@ -559,6 +660,10 @@ select {
 .seat-out {
   opacity: 0.45;
   filter: grayscale(0.55);
+}
+
+.seat-all-in {
+  border-color: rgba(240, 180, 90, 0.7);
 }
 
 .seat-name {

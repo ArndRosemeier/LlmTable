@@ -182,7 +182,7 @@ export async function generatePokerLlmTurn(ctx: TurnGenerationContext): Promise<
   const roster = state.participants
     .map((p) => {
       const ps = poker.players.find((x) => x.participantId === p.id);
-      const status = ps?.status === "out" || (ps && ps.stack <= 0) ? "out" : (ps?.status ?? "?");
+      const status = ps?.status ?? "?";
       return `- ${p.displayName} (stack ${ps?.stack ?? "?"}, status ${status}, bet ${ps?.betThisStreet ?? 0})`;
     })
     .join("\n");

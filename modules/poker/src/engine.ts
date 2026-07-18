@@ -105,27 +105,52 @@ function commitChips(player: PokerPlayerState, amount: number, poker: PokerState
 }
 
 /**
- * Build main + side pots from total contributions this hand.
+ * Build main + side pots for the current hand.
+ *
+ * Side pots are created only when someone is all-in for less than the max
+ * contribution. Unequal live bets (blinds, facing a raise) stay one pot.
  * Folded players still fund pots but cannot win them.
  */
 export function calculateSidePots(players: PokerPlayerState[]): PokerSidePot[] {
-  const levels = [
+  const total = players.reduce((sum, p) => sum + p.contributed, 0);
+  if (total <= 0) {
+    return [];
+  }
+
+  const contenderIds = players
+    .filter((p) => p.status === "active" || p.status === "allIn")
+    .map((p) => p.participantId);
+  if (contenderIds.length === 0) {
+    return [];
+  }
+
+  const maxContrib = Math.max(...players.map((p) => p.contributed), 0);
+  const shortAllInLevels = [
     ...new Set(
-      players.filter((p) => p.contributed > 0).map((p) => p.contributed),
+      players
+        .filter((p) => p.status === "allIn" && p.contributed > 0 && p.contributed < maxContrib)
+        .map((p) => p.contributed),
     ),
   ].sort((a, b) => a - b);
 
+  // No short all-in → a single pot (even if contributions differ mid-street).
+  if (shortAllInLevels.length === 0) {
+    return [{ amount: total, eligibleParticipantIds: contenderIds }];
+  }
+
+  const levels = [...new Set([...shortAllInLevels, maxContrib])].sort((a, b) => a - b);
   const pots: PokerSidePot[] = [];
   let prev = 0;
   for (const level of levels) {
-    const funders = players.filter((p) => p.contributed >= level);
-    if (funders.length === 0) {
-      prev = level;
-      continue;
-    }
-    const amount = (level - prev) * funders.length;
-    const eligibleParticipantIds = funders
-      .filter((p) => p.status === "active" || p.status === "allIn")
+    const amount = players.reduce((sum, p) => {
+      const slice = Math.max(0, Math.min(p.contributed, level) - prev);
+      return sum + slice;
+    }, 0);
+    const eligibleParticipantIds = players
+      .filter(
+        (p) =>
+          (p.status === "active" || p.status === "allIn") && p.contributed >= level,
+      )
       .map((p) => p.participantId);
     if (amount > 0 && eligibleParticipantIds.length > 0) {
       pots.push({ amount, eligibleParticipantIds });
