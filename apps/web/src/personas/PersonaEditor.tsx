@@ -34,9 +34,26 @@ export function PersonaEditor({
   const invitedSet = new Set(invitedIds);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [portraitError, setPortraitError] = useState<string | null>(null);
+  const [sameModelForAll, setSameModelForAll] = useState(false);
 
   function update(id: string, patch: Partial<PersonaDraft>): void {
+    if (sameModelForAll && typeof patch.model === "string") {
+      const model = patch.model;
+      onChange(
+        personas.map((p) => (p.id === id ? { ...p, ...patch, model } : { ...p, model })),
+      );
+      return;
+    }
     onChange(personas.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  }
+
+  function toggleSameModelForAll(enabled: boolean): void {
+    setSameModelForAll(enabled);
+    if (!enabled || personas.length === 0) {
+      return;
+    }
+    const model = personas[0].model;
+    onChange(personas.map((p) => ({ ...p, model })));
   }
 
   function remove(id: string): void {
@@ -100,7 +117,17 @@ export function PersonaEditor({
   return (
     <section className="persona-editor">
       <header className="section-header">
-        <h2>Personas</h2>
+        <div className="section-header-leading">
+          <h2>Personas</h2>
+          <label className="checkbox-row section-header-check">
+            <input
+              type="checkbox"
+              checked={sameModelForAll}
+              onChange={(e) => toggleSameModelForAll(e.target.checked)}
+            />
+            <span>All personas with same model</span>
+          </label>
+        </div>
         <button type="button" className="btn btn-secondary" onClick={addPersona}>
           Add persona
         </button>

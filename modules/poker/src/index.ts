@@ -27,9 +27,14 @@ export const pokerModule: GameModule = {
 };
 
 export { createPokerRules, createPokerCoordinator, generatePokerLlmTurn };
-export type { PokerState } from "./types.js";
+export type { PokerSidePot, PokerState } from "./types.js";
 export { isAwaitingNextHand, isPokerState } from "./types.js";
-export { continueToNextHand, legalActions } from "./engine.js";
+export { calculateSidePots, continueToNextHand, legalActions } from "./engine.js";
 export { formatCard, formatCards } from "./cards.js";
 export type { Card, Rank, Suit } from "./cards.js";
+export {
+  POKER_CHAT_HAND_WINDOW,
+  trimPokerMessages,
+  withPokerChatWindow,
+} from "./chatWindow.js";
 

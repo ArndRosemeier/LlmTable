@@ -25,6 +25,14 @@ export interface PokerWinner {
   participantId: ParticipantId;
   amount: number;
   handName: string;
+  /** e.g. "Main pot" / "Side pot 1" when side pots were awarded. */
+  potLabel?: string;
+}
+
+/** One main/side pot layer built from all-in contribution levels. */
+export interface PokerSidePot {
+  amount: number;
+  eligibleParticipantIds: ParticipantId[];
 }
 
 export interface PokerState {

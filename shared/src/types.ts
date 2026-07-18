@@ -33,6 +33,8 @@ export interface ChatMessage {
   imageDataUrl?: string;
   /** Prompt used to generate imageDataUrl, when known. */
   imagePrompt?: string;
+  /** Poker: hand number this line belongs to (for rolling chat windows). */
+  handNumber?: number;
 }
 
 export interface TableState {

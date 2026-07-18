@@ -232,10 +232,25 @@ select {
   gap: 1rem;
 }
 
+.section-header-leading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  min-width: 0;
+}
+
 .section-header h2 {
   margin: 0;
   font-family: var(--font-display);
   font-size: clamp(1.25rem, 2vw, 1.6rem);
+}
+
+.section-header-check {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  white-space: nowrap;
 }
 
 .persona-editor {
@@ -680,6 +695,19 @@ select {
   padding: 0.25rem 0.75rem;
   font-weight: 700;
   font-size: 0.9rem;
+}
+
+.pot-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: center;
+  align-items: center;
+}
+
+.pot-chip-total {
+  border-color: rgba(240, 213, 154, 0.55);
+  color: #f0d59a;
 }
 
 .winners-banner {
@@ -1195,6 +1223,38 @@ select {
     auto,
     auto,
     auto;
+}
+
+.seat-pot-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  margin-top: 0.3rem;
+  padding: 0.12rem 0.45rem 0.12rem 0.28rem;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(42, 28, 14, 0.92), rgba(22, 14, 8, 0.95));
+  border: 1px solid rgba(224, 168, 74, 0.55);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  color: #f0d59a;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.seat-pot-marker-chip {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, #f6e2a8, #c8922e 55%, #7a5414 100%);
+  border: 1px solid rgba(255, 230, 160, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(80, 45, 10, 0.35);
+  flex-shrink: 0;
+}
+
+.seat-pot-marker-value {
+  font-variant-numeric: tabular-nums;
 }
 
 .seat-cards {

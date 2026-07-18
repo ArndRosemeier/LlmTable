@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { ClientAction, ParticipantId, TableState } from "@llm-table/shared";
 import {
+  calculateSidePots,
   formatCard,
   isAwaitingNextHand,
   isPokerState,
@@ -48,6 +49,10 @@ export function PokerTableView({
   ]);
 
   const poker: PokerState | null = isPokerState(state.moduleState) ? state.moduleState : null;
+  const sidePots = useMemo(
+    () => (poker && poker.pot > 0 ? calculateSidePots(poker.players) : []),
+    [poker],
+  );
   const canDealNext =
     poker !== null &&
     isAwaitingNextHand(poker) &&
@@ -166,16 +171,29 @@ export function PokerTableView({
                 <span className="board-placeholder">Board</span>
               ) : null}
             </div>
-            <div className="pot-chip">Pot {poker?.pot ?? 0}</div>
+            {sidePots.length > 1 ? (
+              <div className="pot-stack">
+                {sidePots.map((pot, i) => (
+                  <div key={`pot-${i}`} className="pot-chip">
+                    {i === 0 ? "Main pot" : `Side pot ${i}`} {pot.amount}
+                  </div>
+                ))}
+                <div className="pot-chip pot-chip-total">Total {poker?.pot ?? 0}</div>
+              </div>
+            ) : (
+              <div className="pot-chip">Pot {poker?.pot ?? 0}</div>
+            )}
             {poker?.winners?.length ? (
               <div className="winners-banner">
                 {poker.winners.map((w) => {
                   const name =
                     state.participants.find((p) => p.id === w.participantId)?.displayName ??
                     w.participantId;
+                  const potBit = w.potLabel ? `${w.potLabel}: ` : "";
                   return (
-                    <div key={w.participantId}>
-                      {name} wins {w.amount} — {w.handName}
+                    <div key={`${w.participantId}-${w.potLabel ?? "pot"}-${w.amount}`}>
+                      {name} wins {w.amount} — {potBit}
+                      {w.handName}
                     </div>
                   );
                 })}
@@ -219,6 +237,8 @@ export function PokerTableView({
           const active = state.activeSpeakerId === p.id;
           const ps = poker?.players.find((x) => x.participantId === p.id);
           const eliminated = ps?.status === "out" || (ps !== undefined && ps.stack <= 0);
+          const inHand = ps?.status === "active" || ps?.status === "allIn";
+          const potShare = ps?.contributed ?? 0;
           const showCards =
             ps &&
             !eliminated &&
@@ -255,8 +275,13 @@ export function PokerTableView({
                     : p.kind}{" "}
                 {!eliminated && ps?.status === "folded" ? "· folded" : ""}
                 {!eliminated && ps?.status === "allIn" ? "· all-in" : ""}
-                {!eliminated && ps?.betThisStreet ? ` · bet ${ps.betThisStreet}` : ""}
               </span>
+              {inHand && potShare > 0 ? (
+                <span className="seat-pot-marker" title="In the pot this hand">
+                  <span className="seat-pot-marker-chip" aria-hidden="true" />
+                  <span className="seat-pot-marker-value">{potShare}</span>
+                </span>
+              ) : null}
               {showCards ? (
                 <div className="seat-cards">
                   {ps && ps.holeCards.length > 0 ? (

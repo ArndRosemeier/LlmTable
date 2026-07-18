@@ -1,4 +1,5 @@
 import type { ClientAction, ParticipantId, RulesEngine, TableState } from "@llm-table/shared";
+import { withPokerChatWindow } from "./chatWindow.js";
 import { applyPokerAction, createInitialPokerState, startNewHand } from "./engine.js";
 import { gloatQueue, isPokerState, type PokerState } from "./types.js";
 
@@ -19,21 +20,26 @@ function appendTalk(
   if (!actor) {
     throw new Error(`Unknown actor: ${actorId}`);
   }
+  const poker = requirePoker(state);
   const talk = tableTalk?.trim();
   const content = talk && talk.length > 0 ? talk : `(${actionLabel})`;
-  return {
-    ...state,
-    messages: [
-      ...state.messages,
-      {
-        id: crypto.randomUUID(),
-        participantId: actorId,
-        displayName: actor.displayName,
-        content,
-        createdAt: new Date().toISOString(),
-      },
-    ],
-  };
+  return withPokerChatWindow(
+    {
+      ...state,
+      messages: [
+        ...state.messages,
+        {
+          id: crypto.randomUUID(),
+          participantId: actorId,
+          displayName: actor.displayName,
+          content,
+          createdAt: new Date().toISOString(),
+          handNumber: poker.handNumber,
+        },
+      ],
+    },
+    poker.handNumber,
+  );
 }
 
 function applyWinnerGloat(
@@ -65,27 +71,31 @@ function applyWinnerGloat(
     pendingGloatIds: nextQueue,
   };
 
-  return {
-    ...state,
-    phase: "running",
-    moduleState: nextPoker,
-    activeSpeakerId: nextQueue[0] ?? null,
-    messages: [
-      ...state.messages,
-      {
-        id: crypto.randomUUID(),
-        participantId: actorId,
-        displayName: actor.displayName,
-        content,
-        createdAt: new Date().toISOString(),
-      },
-    ],
-    error: null,
-    statusMessage:
-      nextQueue.length > 0
-        ? `${actor.displayName} celebrated — next winner…`
-        : `${actor.displayName} celebrated — review the pot, then continue`,
-  };
+  return withPokerChatWindow(
+    {
+      ...state,
+      phase: "running",
+      moduleState: nextPoker,
+      activeSpeakerId: nextQueue[0] ?? null,
+      messages: [
+        ...state.messages,
+        {
+          id: crypto.randomUUID(),
+          participantId: actorId,
+          displayName: actor.displayName,
+          content,
+          createdAt: new Date().toISOString(),
+          handNumber: poker.handNumber,
+        },
+      ],
+      error: null,
+      statusMessage:
+        nextQueue.length > 0
+          ? `${actor.displayName} celebrated — next winner…`
+          : `${actor.displayName} celebrated — review the pot, then continue`,
+    },
+    poker.handNumber,
+  );
 }
 
 export function onPokerStart(state: TableState): TableState {
@@ -120,22 +130,28 @@ export function createPokerRules(): RulesEngine {
           return applyWinnerGloat(state, actorId, content);
         }
 
-        return {
-          ...state,
-          phase: state.phase === "paused" ? "running" : state.phase,
-          messages: [
-            ...state.messages,
-            {
-              id: crypto.randomUUID(),
-              participantId: actorId,
-              displayName: actor.displayName,
-              content,
-              createdAt: new Date().toISOString(),
-            },
-          ],
-          error: null,
-          statusMessage: `${actor.displayName} comments from the rail`,
-        };
+        const poker = isPokerState(state.moduleState) ? state.moduleState : null;
+        const handNumber = poker?.handNumber ?? 0;
+        return withPokerChatWindow(
+          {
+            ...state,
+            phase: state.phase === "paused" ? "running" : state.phase,
+            messages: [
+              ...state.messages,
+              {
+                id: crypto.randomUUID(),
+                participantId: actorId,
+                displayName: actor.displayName,
+                content,
+                createdAt: new Date().toISOString(),
+                ...(handNumber > 0 ? { handNumber } : {}),
+              },
+            ],
+            error: null,
+            statusMessage: `${actor.displayName} comments from the rail`,
+          },
+          handNumber,
+        );
       }
 
       if (action.type !== "poker.act") {

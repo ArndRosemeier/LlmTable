@@ -6,7 +6,12 @@ import {
   type ParticipantId,
   type TableState,
 } from "@llm-table/shared";
-import { continueToNextHand, isAwaitingNextHand, isPokerState } from "@llm-table/poker";
+import {
+  continueToNextHand,
+  isAwaitingNextHand,
+  isPokerState,
+  withPokerChatWindow,
+} from "@llm-table/poker";
 import {
   buildInitialRpgState,
   isRpgState,
@@ -580,14 +585,17 @@ export class LocalSessionController {
     session.waitingForHuman = null;
 
     const nextPoker = continueToNextHand(session.state.moduleState);
-    session.state = {
-      ...session.state,
-      phase: "running",
-      moduleState: nextPoker,
-      activeSpeakerId: nextPoker.actingParticipantId,
-      statusMessage: nextPoker.lastActionSummary ?? "New hand dealt",
-      error: null,
-    };
+    session.state = withPokerChatWindow(
+      {
+        ...session.state,
+        phase: "running",
+        moduleState: nextPoker,
+        activeSpeakerId: nextPoker.actingParticipantId,
+        statusMessage: nextPoker.lastActionSummary ?? "New hand dealt",
+        error: null,
+      },
+      nextPoker.handNumber,
+    );
     await this.emit(true);
     void this.runTurnLoop();
   }

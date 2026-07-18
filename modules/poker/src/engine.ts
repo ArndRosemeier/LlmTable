@@ -8,6 +8,7 @@ import {
   gloatQueue,
   type PokerPlayerState,
   type PokerPlayerStatus,
+  type PokerSidePot,
   type PokerState,
   type PokerStreet,
   type PokerWinner,
@@ -101,6 +102,82 @@ function commitChips(player: PokerPlayerState, amount: number, poker: PokerState
   if (player.stack === 0) {
     player.status = "allIn";
   }
+}
+
+/**
+ * Build main + side pots from total contributions this hand.
+ * Folded players still fund pots but cannot win them.
+ */
+export function calculateSidePots(players: PokerPlayerState[]): PokerSidePot[] {
+  const levels = [
+    ...new Set(
+      players.filter((p) => p.contributed > 0).map((p) => p.contributed),
+    ),
+  ].sort((a, b) => a - b);
+
+  const pots: PokerSidePot[] = [];
+  let prev = 0;
+  for (const level of levels) {
+    const funders = players.filter((p) => p.contributed >= level);
+    if (funders.length === 0) {
+      prev = level;
+      continue;
+    }
+    const amount = (level - prev) * funders.length;
+    const eligibleParticipantIds = funders
+      .filter((p) => p.status === "active" || p.status === "allIn")
+      .map((p) => p.participantId);
+    if (amount > 0 && eligibleParticipantIds.length > 0) {
+      pots.push({ amount, eligibleParticipantIds });
+    }
+    prev = level;
+  }
+  return pots;
+}
+
+/** Seat order starting left of the dealer (for odd-chip splits). */
+function idsInDealerOrder(
+  poker: PokerState,
+  ids: ParticipantId[],
+): ParticipantId[] {
+  const want = new Set(ids);
+  const ordered: ParticipantId[] = [];
+  const n = poker.players.length;
+  for (let offset = 1; offset <= n; offset += 1) {
+    const idx = (poker.dealerSeatIndex + offset) % n;
+    const id = poker.players[idx].participantId;
+    if (want.has(id)) {
+      ordered.push(id);
+    }
+  }
+  return ordered;
+}
+
+function potLabel(index: number, total: number): string {
+  if (total <= 1) {
+    return "Pot";
+  }
+  return index === 0 ? "Main pot" : `Side pot ${index}`;
+}
+
+function mergeWinnersByPlayer(winners: PokerWinner[]): PokerWinner[] {
+  const merged = new Map<ParticipantId, PokerWinner>();
+  for (const w of winners) {
+    const existing = merged.get(w.participantId);
+    if (!existing) {
+      merged.set(w.participantId, { ...w });
+      continue;
+    }
+    existing.amount += w.amount;
+    const labels = [existing.potLabel, w.potLabel].filter(Boolean);
+    if (labels.length > 0) {
+      existing.potLabel = labels.join(", ");
+    }
+    if (existing.handName !== w.handName) {
+      existing.handName = `${existing.handName}; ${w.handName}`;
+    }
+  }
+  return [...merged.values()];
 }
 
 export function createInitialPokerState(participants: Participant[]): PokerState {
@@ -263,12 +340,13 @@ function onlyOneContender(poker: PokerState): boolean {
   return contenders(poker).length === 1;
 }
 
-function awardPot(poker: PokerState, winners: PokerWinner[]): void {
-  for (const w of winners) {
+function awardWinnings(poker: PokerState, winners: PokerWinner[]): void {
+  const merged = mergeWinnersByPlayer(winners);
+  for (const w of merged) {
     playerById(poker, w.participantId).stack += w.amount;
   }
-  poker.winners = winners;
-  poker.pendingGloatIds = winners.map((w) => w.participantId);
+  poker.winners = merged;
+  poker.pendingGloatIds = merged.map((w) => w.participantId);
   poker.awaitingNextHand = false;
   poker.pot = 0;
   poker.actingParticipantId = null;
@@ -278,12 +356,17 @@ function awardPot(poker: PokerState, winners: PokerWinner[]): void {
 
 function resolveShowdown(poker: PokerState): void {
   const alive = contenders(poker);
+  if (alive.length === 0) {
+    throw new Error("Showdown with no contenders");
+  }
+
   if (alive.length === 1) {
-    awardPot(poker, [
+    awardWinnings(poker, [
       {
         participantId: alive[0].participantId,
         amount: poker.pot,
         handName: "Won uncontested",
+        potLabel: "Pot",
       },
     ]);
     poker.lastActionSummary = "Everyone else folded.";
@@ -298,22 +381,86 @@ function resolveShowdown(poker: PokerState): void {
     }
   }
 
-  const scored = alive.map((p) => ({
-    player: p,
-    hand: evaluateBestHand([...p.holeCards, ...poker.communityCards]),
-  }));
-  scored.sort((a, b) => compareEvaluated(b.hand, a.hand));
-  const best = scored[0].hand;
-  const top = scored.filter((s) => compareEvaluated(s.hand, best) === 0);
-  const share = Math.floor(poker.pot / top.length);
-  const remainder = poker.pot - share * top.length;
-  const winners: PokerWinner[] = top.map((t, i) => ({
-    participantId: t.player.participantId,
-    amount: share + (i === 0 ? remainder : 0),
-    handName: t.hand.name,
-  }));
-  awardPot(poker, winners);
-  poker.lastActionSummary = `Showdown: ${winners.map((w) => w.handName).join(" / ")}`;
+  const handById = new Map(
+    alive.map((p) => [
+      p.participantId,
+      evaluateBestHand([...p.holeCards, ...poker.communityCards]),
+    ]),
+  );
+
+  const pots = calculateSidePots(poker.players);
+  if (pots.length === 0) {
+    awardWinnings(poker, [
+      {
+        participantId: alive[0].participantId,
+        amount: poker.pot,
+        handName: handById.get(alive[0].participantId)?.name ?? "Showdown",
+        potLabel: "Pot",
+      },
+    ]);
+    poker.lastActionSummary = "Showdown";
+    return;
+  }
+
+  const potTotal = pots.reduce((sum, p) => sum + p.amount, 0);
+  if (potTotal !== poker.pot) {
+    throw new Error(
+      `Side pot total ${potTotal} does not match table pot ${poker.pot}`,
+    );
+  }
+
+  const winners: PokerWinner[] = [];
+  for (let potIndex = 0; potIndex < pots.length; potIndex += 1) {
+    const pot = pots[potIndex];
+    const label = potLabel(potIndex, pots.length);
+    const eligible = pot.eligibleParticipantIds.filter((id) => handById.has(id));
+    if (eligible.length === 0) {
+      throw new Error(`${label} has no eligible showdown hands`);
+    }
+    if (eligible.length === 1) {
+      winners.push({
+        participantId: eligible[0],
+        amount: pot.amount,
+        handName:
+          handById.get(eligible[0])?.name ??
+          (alive.length === 1 ? "Won uncontested" : "Uncontested"),
+        potLabel: label,
+      });
+      continue;
+    }
+
+    const scored = eligible.map((id) => ({
+      id,
+      hand: handById.get(id)!,
+    }));
+    scored.sort((a, b) => compareEvaluated(b.hand, a.hand));
+    const best = scored[0].hand;
+    const tied = scored.filter((s) => compareEvaluated(s.hand, best) === 0);
+    const tiedIds = idsInDealerOrder(
+      poker,
+      tied.map((t) => t.id),
+    );
+    const share = Math.floor(pot.amount / tiedIds.length);
+    let remainder = pot.amount - share * tiedIds.length;
+    for (const id of tiedIds) {
+      const odd = remainder > 0 ? 1 : 0;
+      if (odd) {
+        remainder -= 1;
+      }
+      winners.push({
+        participantId: id,
+        amount: share + odd,
+        handName: handById.get(id)!.name,
+        potLabel: label,
+      });
+    }
+  }
+
+  awardWinnings(poker, winners);
+  const summary = winners
+    .map((w) => `${w.potLabel ?? "Pot"}: ${w.handName}`)
+    .join(" · ");
+  poker.lastActionSummary = `Showdown — ${summary}`;
 }
 
 function advanceStreet(poker: PokerState): void {
@@ -385,8 +532,13 @@ export function legalActions(
   const callAmount = Math.min(toCall, player.stack);
   const maxRaiseTo = player.betThisStreet + player.stack;
   const minRaiseTo = Math.min(poker.currentBet + poker.minRaise, maxRaiseTo);
-  const canBet = poker.currentBet === 0 && player.stack > 0;
-  const canRaise = poker.currentBet > 0 && maxRaiseTo > poker.currentBet;
+  // Short all-ins do not clear hasActedThisStreet; those players may only call/fold.
+  const canBet =
+    poker.currentBet === 0 && player.stack > 0 && !player.hasActedThisStreet;
+  const canRaise =
+    poker.currentBet > 0 &&
+    maxRaiseTo > poker.currentBet &&
+    !player.hasActedThisStreet;
 
   return {
     canFold: true,
@@ -443,7 +595,10 @@ export function applyPokerAction(
       }
       commitChips(player, legal.callAmount, next);
       player.hasActedThisStreet = true;
-      next.lastActionSummary = `calls ${legal.callAmount}`;
+      next.lastActionSummary =
+        player.stack === 0
+          ? `calls ${legal.callAmount} all-in`
+          : `calls ${legal.callAmount}`;
       break;
     }
     case "bet":
@@ -472,19 +627,28 @@ export function applyPokerAction(
         throw new Error("Invalid raise amount");
       }
       const prevBet = next.currentBet;
+      const prevMinRaise = next.minRaise;
       commitChips(player, add, next);
       if (player.betThisStreet > prevBet) {
-        next.minRaise = Math.max(next.minRaise, player.betThisStreet - prevBet);
+        const raiseSize = player.betThisStreet - prevBet;
         next.currentBet = player.betThisStreet;
-        for (const p of next.players) {
-          if (p.participantId !== actorId && p.status === "active") {
-            p.hasActedThisStreet = false;
+        // Short all-in (< full min-raise) does not reopen action for players who already acted.
+        const fullOpen = prevBet === 0 || raiseSize >= prevMinRaise;
+        if (fullOpen) {
+          next.minRaise = Math.max(next.bigBlind, raiseSize);
+          for (const p of next.players) {
+            if (p.participantId !== actorId && p.status === "active") {
+              p.hasActedThisStreet = false;
+            }
           }
         }
       }
       player.hasActedThisStreet = true;
+      const allInNote = player.stack === 0 ? " all-in" : "";
       next.lastActionSummary =
-        action === "bet" ? `bets ${player.betThisStreet}` : `raises to ${player.betThisStreet}`;
+        action === "bet"
+          ? `bets ${player.betThisStreet}${allInNote}`
+          : `raises to ${player.betThisStreet}${allInNote}`;
       break;
     }
     default: {
