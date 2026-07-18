@@ -16,10 +16,3 @@ export function getModule(moduleId: string): GameModule {
   }
   return mod;
 }
-
-export function listModules(): Array<{ id: string; displayName: string }> {
-  return [...modules.values()].map((m) => ({
-    id: m.id,
-    displayName: m.displayName,
-  }));
-}

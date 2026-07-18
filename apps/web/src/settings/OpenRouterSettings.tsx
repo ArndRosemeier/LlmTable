@@ -9,10 +9,13 @@ export interface OpenRouterSettingsProps {
   imageModels: OpenRouterModel[];
   loadingModels: boolean;
   savedFlash: boolean;
+  backupBusy: boolean;
   onApiKeyChange: (value: string) => void;
   onCoordinatorModelChange: (value: string) => void;
   onImageModelChange: (value: string) => void;
-  onSave: () => void;
+  onRefreshModels: () => void;
+  onSaveAll: () => void;
+  onLoadAll: () => void;
 }
 
 export function OpenRouterSettings({
@@ -23,10 +26,13 @@ export function OpenRouterSettings({
   imageModels,
   loadingModels,
   savedFlash,
+  backupBusy,
   onApiKeyChange,
   onCoordinatorModelChange,
   onImageModelChange,
-  onSave,
+  onRefreshModels,
+  onSaveAll,
+  onLoadAll,
 }: OpenRouterSettingsProps) {
   return (
     <div className="settings-bar">
@@ -60,9 +66,35 @@ export function OpenRouterSettings({
           placeholder={loadingModels ? "Loading models…" : "Select image model"}
         />
       </label>
-      <button type="button" className="btn" onClick={onSave}>
-        {savedFlash ? "Saved" : "Save & load models"}
-      </button>
+      <div className="settings-actions">
+        <button
+          type="button"
+          className="btn"
+          onClick={onSaveAll}
+          disabled={backupBusy}
+          title="Save settings, chats, sessions, seeds — everything in IndexedDB — to a JSON file"
+        >
+          {backupBusy ? "Working…" : savedFlash ? "Saved" : "Save all"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onLoadAll}
+          disabled={backupBusy}
+          title="Replace all local IndexedDB data from a JSON backup"
+        >
+          Load all
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onRefreshModels}
+          disabled={backupBusy || loadingModels}
+          title="Fetch the OpenRouter model lists for the selectors"
+        >
+          {loadingModels ? "Loading…" : "Refresh models"}
+        </button>
+      </div>
     </div>
   );
 }

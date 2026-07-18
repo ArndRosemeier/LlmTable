@@ -1,6 +1,13 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import type { ClientAction, ParticipantId, TableState } from "@llm-table/shared";
-import { isRpgState, type RpgState } from "@llm-table/rpg";
+import {
+  isRpgState,
+  type RpgPreparationPhase,
+  type RpgPreparationProgress,
+  type RpgState,
+} from "@llm-table/rpg";
+import { useStickChatToBottom } from "../../lib/useStickChatToBottom";
 
 export interface RpgTableViewProps {
   state: TableState;
@@ -12,6 +19,24 @@ export interface RpgTableViewProps {
   onStop: () => void;
   onNextHand?: () => void;
   onAdvance?: () => void;
+  onSetGmImages?: (enabled: boolean) => void;
+}
+
+const PHASE_SHORT: Record<RpgPreparationPhase, string> = {
+  choosing_speaker: "Picking…",
+  generating_turn: "Writing…",
+  creating_image: "Image…",
+  finalizing: "Finishing…",
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(bytes < 10_240 ? 1 : 0)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function seatPosition(index: number, total: number): { left: string; top: string } {
@@ -19,6 +44,115 @@ function seatPosition(index: number, total: number): { left: string; top: string
   const x = 50 + Math.cos(angle) * 48;
   const y = 50 + Math.sin(angle) * 47;
   return { left: `${x}%`, top: `${y}%` };
+}
+
+function ChatSceneImage({
+  src,
+  prompt,
+}: {
+  src: string;
+  prompt: string | undefined;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ left: number; top: number; width: number } | null>(
+    null,
+  );
+
+  useLayoutEffect(() => {
+    if (!open || !prompt || !wrapRef.current) {
+      return;
+    }
+
+    function updatePosition(): void {
+      const el = wrapRef.current;
+      if (!el) {
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      setCoords({
+        left: rect.left + rect.width / 2,
+        top: rect.top,
+        width: Math.min(rect.width, 28 * 16),
+      });
+    }
+
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open, prompt]);
+
+  return (
+    <div
+      ref={wrapRef}
+      className="chat-line-image-wrap"
+      tabIndex={prompt ? 0 : undefined}
+      onMouseEnter={() => {
+        if (prompt) {
+          setOpen(true);
+        }
+      }}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => {
+        if (prompt) {
+          setOpen(true);
+        }
+      }}
+      onBlur={() => setOpen(false)}
+    >
+      <img
+        className="chat-line-image"
+        src={src}
+        alt={prompt ? `Scene: ${prompt}` : "Scene"}
+      />
+      {open && prompt && coords
+        ? createPortal(
+            <div
+              className="chat-line-image-prompt"
+              role="tooltip"
+              style={{
+                left: coords.left,
+                top: coords.top,
+                width: coords.width,
+              }}
+            >
+              {prompt}
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
+  );
+}
+
+function SeatPreparingBadge({ progress }: { progress: RpgPreparationProgress | undefined }) {
+  const phase = progress?.phase ?? "generating_turn";
+  let metric = "";
+  if (progress?.receivedChars != null && progress.receivedChars > 0) {
+    metric = `${progress.receivedChars}c`;
+  } else if (progress?.receivedBytes != null && progress.receivedBytes > 0) {
+    metric = formatBytes(progress.receivedBytes);
+  } else if (progress?.completionTokens != null) {
+    metric = `${progress.completionTokens} tok`;
+  } else if (progress?.imagePartialFrames != null && progress.imagePartialFrames > 0) {
+    metric = `${progress.imagePartialFrames}f`;
+  }
+
+  return (
+    <div className="seat-preparing" aria-live="polite">
+      <span className="seat-preparing-dots" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span className="seat-preparing-label">{PHASE_SHORT[phase]}</span>
+      {metric ? <span className="seat-preparing-metric">{metric}</span> : null}
+    </div>
+  );
 }
 
 export function RpgTableView({
@@ -30,28 +164,46 @@ export function RpgTableView({
   onResume,
   onStop,
   onAdvance,
+  onSetGmImages,
 }: RpgTableViewProps) {
   const [draft, setDraft] = useState("");
-  const [asAction, setAsAction] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const lastMessage = state.messages.at(-1);
+  const { chatRef, chatEndRef } = useStickChatToBottom([
+    state.messages.length,
+    lastMessage?.id,
+    lastMessage?.content,
+    lastMessage?.imageDataUrl,
+  ]);
 
   const rpg: RpgState | null = isRpgState(state.moduleState) ? state.moduleState : null;
   const advance = rpg?.advance ?? { speakerId: null, mode: "idle" as const };
   const canSpeak =
     localParticipantId !== null &&
     (state.phase === "running" || state.phase === "paused");
+  const isPreparing = advance.mode === "preparing";
+  const isAwaitingHuman = advance.mode === "awaiting_human";
+  const awaitingLocal =
+    isAwaitingHuman &&
+    localParticipantId != null &&
+    advance.speakerId === localParticipantId;
+  const handRaised =
+    localParticipantId != null && rpg?.raisedHandParticipantId === localParticipantId;
+  const canSignalHand =
+    canSpeak && state.phase === "running" && localParticipantId != null;
   const canAdvance =
     state.phase === "running" &&
     typeof onAdvance === "function" &&
-    (advance.mode === "preparing" || advance.mode === "ready");
+    (isPreparing || advance.mode === "ready");
   const nextSpeakerName =
     advance.speakerId != null
       ? (state.participants.find((p) => p.id === advance.speakerId)?.displayName ?? "speaker")
       : null;
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [state.messages.length]);
+  const preparingSpeakerId = isPreparing ? advance.speakerId : null;
+  const showChoosingBadge =
+    isPreparing && preparingSpeakerId == null && advance.progress?.phase === "choosing_speaker";
+  const gmImagesEnabled = state.gmImagesEnabled === true;
+  const showImagesToggle =
+    state.phase !== "lobby" && typeof onSetGmImages === "function";
 
   function handleSubmit(event: FormEvent): void {
     event.preventDefault();
@@ -59,9 +211,19 @@ export function RpgTableView({
     if (!content || !canSpeak) {
       return;
     }
-    onAction({ type: "rpg.say", content, isAction: asAction });
+    onAction({ type: "rpg.say", content, isAction: false });
     setDraft("");
-    setAsAction(false);
+  }
+
+  function handleHandToggle(): void {
+    if (!canSignalHand) {
+      return;
+    }
+    if (handRaised || awaitingLocal) {
+      onAction({ type: "rpg.lowerHand" });
+      return;
+    }
+    onAction({ type: "rpg.raiseHand" });
   }
 
   return (
@@ -81,13 +243,6 @@ export function RpgTableView({
           {state.phase === "lobby" ? (
             <button type="button" className="btn" onClick={onStart}>
               Start
-            </button>
-          ) : null}
-          {canAdvance ? (
-            <button type="button" className="btn" onClick={onAdvance}>
-              {advance.mode === "preparing"
-                ? `Preparing${nextSpeakerName ? ` ${nextSpeakerName}` : ""}…`
-                : `Next${nextSpeakerName ? `: ${nextSpeakerName}` : ""}`}
             </button>
           ) : null}
           {state.phase === "running" ? (
@@ -140,7 +295,7 @@ export function RpgTableView({
             ) : null}
           </div>
 
-          <div className="table-chat">
+          <div className="table-chat" ref={chatRef}>
             {state.messages.length === 0 ? (
               <p className="chat-empty">
                 Start when ready, then press Next — the GM persona opens the scene.
@@ -157,11 +312,7 @@ export function RpgTableView({
                 >
                   <strong>{m.displayName}</strong>
                   {m.imageDataUrl ? (
-                    <img
-                      className="chat-line-image"
-                      src={m.imageDataUrl}
-                      alt="Scene"
-                    />
+                    <ChatSceneImage src={m.imageDataUrl} prompt={m.imagePrompt} />
                   ) : null}
                   <span>{m.content}</span>
                 </div>
@@ -171,10 +322,20 @@ export function RpgTableView({
           </div>
         </div>
 
+        {showChoosingBadge ? (
+          <div className="rpg-choosing-badge" aria-live="polite">
+            <SeatPreparingBadge progress={advance.progress} />
+          </div>
+        ) : null}
+
         {state.participants.map((p) => {
           const pos = seatPosition(p.seatIndex, state.participants.length);
           const active = state.activeSpeakerId === p.id;
           const isGm = p.tableRole === "gm";
+          const isPreparingHere = preparingSpeakerId === p.id;
+          const handUpHere =
+            rpg?.raisedHandParticipantId === p.id ||
+            (isAwaitingHuman && advance.speakerId === p.id);
           return (
             <div
               key={p.id}
@@ -182,6 +343,8 @@ export function RpgTableView({
                 "seat",
                 active ? "seat-active" : "",
                 isGm ? "seat-gm" : "",
+                handUpHere ? "seat-hand-up" : "",
+                isPreparingHere ? "seat-preparing-host" : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -192,20 +355,68 @@ export function RpgTableView({
               ) : null}
               <span className="seat-name">{p.displayName}</span>
               <span className="seat-kind">{isGm ? "GM" : p.kind === "human" ? "Human" : "PC"}</span>
+              {isGm && showImagesToggle ? (
+                <label className="seat-gm-images">
+                  <input
+                    type="checkbox"
+                    checked={gmImagesEnabled}
+                    onChange={(e) => onSetGmImages?.(e.target.checked)}
+                  />
+                  <span>Pictures</span>
+                </label>
+              ) : null}
+              {p.id === localParticipantId ? (
+                <button
+                  type="button"
+                  className={[
+                    "seat-hand-btn",
+                    handRaised || awaitingLocal ? "seat-hand-btn-active" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  onClick={handleHandToggle}
+                  disabled={!canSignalHand}
+                  aria-pressed={handRaised || awaitingLocal}
+                  title={
+                    rpg?.preferGmNext && (handRaised || awaitingLocal)
+                      ? "Hand raised — waiting until after the GM"
+                      : handRaised || awaitingLocal
+                        ? "Lower hand"
+                        : "Raise hand to be picked on the next player turn"
+                  }
+                >
+                  {handRaised || awaitingLocal ? "✋ Lower hand" : "✋ Raise hand"}
+                </button>
+              ) : handUpHere ? (
+                <span className="seat-hand-raised">✋ Hand up</span>
+              ) : null}
+              {isPreparingHere ? <SeatPreparingBadge progress={advance.progress} /> : null}
             </div>
           );
         })}
       </div>
 
-      {canAdvance ? (
-        <div className="rpg-advance-bar">
-          <button type="button" className="btn btn-lg" onClick={onAdvance}>
-            {advance.mode === "preparing"
-              ? `Preparing${nextSpeakerName ? ` ${nextSpeakerName}` : ""}…`
-              : `Next${nextSpeakerName ? `: ${nextSpeakerName}` : ""}`}
+      <div className="rpg-footer-slot">
+        <div
+          className={[
+            "rpg-advance-bar",
+            canAdvance && !isPreparing ? "" : "rpg-advance-bar-idle",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
+          <button
+            type="button"
+            className="btn btn-lg"
+            onClick={onAdvance}
+            disabled={!canAdvance || isPreparing}
+            tabIndex={canAdvance && !isPreparing ? 0 : -1}
+            aria-hidden={!canAdvance || isPreparing}
+          >
+            {`Next${nextSpeakerName ? `: ${nextSpeakerName}` : ""}`}
           </button>
         </div>
-      ) : null}
+      </div>
 
       {localParticipantId ? (
         <form className="human-input rpg-human-input" onSubmit={handleSubmit}>
@@ -215,27 +426,20 @@ export function RpgTableView({
             placeholder={
               !canSpeak
                 ? "Start the adventure to join in"
-                : asAction
-                  ? "What do you attempt? (speaks now; discards pending Next)"
-                  : "Your line… (speaks now; discards pending Next)"
+                : awaitingLocal
+                  ? "Your turn — type your line"
+                  : handRaised
+                    ? "Hand raised — you'll be picked on the next player turn"
+                    : "Your line… (speaks now; discards pending Next)"
             }
             disabled={!canSpeak}
           />
-          <label className="checkbox-row rpg-action-toggle">
-            <input
-              type="checkbox"
-              checked={asAction}
-              onChange={(e) => setAsAction(e.target.checked)}
-              disabled={!canSpeak}
-            />
-            <span>Action</span>
-          </label>
           <button type="submit" className="btn" disabled={!canSpeak || !draft.trim()}>
-            {asAction ? "Attempt" : "Say"}
+            Say
           </button>
         </form>
       ) : (
-        <p className="spectator-note">Spectating — press Next to advance the table</p>
+        <p className="spectator-note">LLM-only table — press Next to advance</p>
       )}
     </div>
   );

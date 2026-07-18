@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import type { ClientAction, ParticipantId, TableState } from "@llm-table/shared";
+import { useStickChatToBottom } from "../../lib/useStickChatToBottom";
 
 export interface ConversationTableViewProps {
   state: TableState;
@@ -28,16 +29,17 @@ export function ConversationTableView({
   onStop,
 }: ConversationTableViewProps) {
   const [draft, setDraft] = useState("");
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const lastMessage = state.messages.at(-1);
+  const { chatRef, chatEndRef } = useStickChatToBottom([
+    state.messages.length,
+    lastMessage?.id,
+    lastMessage?.content,
+  ]);
   const canSpeak =
     localParticipantId !== null &&
     (state.phase === "running" || state.phase === "paused");
   const isMyTurn =
     localParticipantId !== null && state.activeSpeakerId === localParticipantId;
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [state.messages.length]);
 
   function handleSubmit(event: FormEvent): void {
     event.preventDefault();
@@ -86,7 +88,7 @@ export function ConversationTableView({
 
       <div className="table-stage">
         <div className="table-felt">
-          <div className="table-chat">
+          <div className="table-chat" ref={chatRef}>
             {state.messages.length === 0 ? (
               <p className="chat-empty">No messages yet. Start the conversation when ready.</p>
             ) : (
@@ -150,7 +152,7 @@ export function ConversationTableView({
           </button>
         </form>
       ) : (
-        <p className="spectator-note">Spectating — LLM-only table</p>
+        <p className="spectator-note">LLM-only table — no human seat this round</p>
       )}
     </div>
   );

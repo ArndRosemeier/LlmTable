@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { ClientAction, ParticipantId, TableState } from "@llm-table/shared";
 import {
   formatCard,
@@ -7,6 +7,7 @@ import {
   legalActions,
   type PokerState,
 } from "@llm-table/poker";
+import { useStickChatToBottom } from "../../lib/useStickChatToBottom";
 import { PlayingCard } from "./PlayingCard";
 
 export interface PokerTableViewProps {
@@ -39,7 +40,12 @@ export function PokerTableView({
 }: PokerTableViewProps) {
   const [talk, setTalk] = useState("");
   const [raiseTo, setRaiseTo] = useState("");
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const lastMessage = state.messages.at(-1);
+  const { chatRef, chatEndRef } = useStickChatToBottom([
+    state.messages.length,
+    lastMessage?.id,
+    lastMessage?.content,
+  ]);
 
   const poker: PokerState | null = isPokerState(state.moduleState) ? state.moduleState : null;
   const canDealNext =
@@ -62,10 +68,6 @@ export function PokerTableView({
       return null;
     }
   }, [poker, localParticipantId, isMyTurn]);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [state.messages.length]);
 
   useEffect(() => {
     if (legal?.minRaiseTo) {
@@ -190,7 +192,7 @@ export function PokerTableView({
             ) : null}
           </div>
 
-          <div className="table-chat poker-chat">
+          <div className="table-chat poker-chat" ref={chatRef}>
             {state.messages.length === 0 ? (
               <p className="chat-empty">Table talk shows up here.</p>
             ) : (
@@ -361,7 +363,7 @@ export function PokerTableView({
           )}
         </div>
       ) : (
-        <p className="spectator-note">Spectating</p>
+        <p className="spectator-note">LLM-only table — no human seat this round</p>
       )}
     </div>
   );

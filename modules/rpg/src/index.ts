@@ -26,7 +26,15 @@ export const rpgModule: GameModule = {
 export { createRpgRules, createRpgCoordinator, generateRpgLlmTurn, buildInitialRpgState };
 export { maybeRefreshTranscriptSummary, formatRpgPromptMemory, normalizeRpgState } from "./promptMemory.js";
 export { isRpgState } from "./types.js";
-export type { RpgState, RpgPartyMember, RpgLastRoll, RpgClockState, RpgAdvanceState } from "./types.js";
+export type {
+  RpgState,
+  RpgPartyMember,
+  RpgLastRoll,
+  RpgClockState,
+  RpgAdvanceState,
+  RpgPreparationPhase,
+  RpgPreparationProgress,
+} from "./types.js";
 export {
   ADVENTURE_SEEDS,
   getAdventureSeed,

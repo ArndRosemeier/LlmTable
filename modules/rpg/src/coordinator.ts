@@ -95,10 +95,6 @@ export function createRpgCoordinator(deps: CoordinatorDeps): Coordinator {
       }
       const rpg = normalizeRpgState(state.moduleState);
       const eligible = eligibleLlmParticipants(state);
-      if (eligible.length === 0) {
-        return null;
-      }
-
       const gm = eligible.find((p) => p.id === rpg.gmParticipantId);
 
       // Hard rule — not a fallback: after a PC acts, GM narrates.
@@ -118,6 +114,18 @@ export function createRpgCoordinator(deps: CoordinatorDeps): Coordinator {
             return checked.id;
           }
         }
+      }
+
+      // Hard rule: human raised hand — only reached when GM is not owed (above).
+      if (rpg.raisedHandParticipantId) {
+        const hand = state.participants.find((p) => p.id === rpg.raisedHandParticipantId);
+        if (hand && hand.kind === "human" && hand.tableRole !== "gm") {
+          return hand.id;
+        }
+      }
+
+      if (eligible.length === 0) {
+        return null;
       }
 
       const lastSpeakerId = state.messages.at(-1)?.participantId ?? null;

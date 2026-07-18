@@ -7,21 +7,17 @@ export default defineConfig({
   resolve: {
     alias: {
       "@llm-table/shared": path.resolve(__dirname, "../../shared/src/index.ts"),
+      "@llm-table/conversation": path.resolve(
+        __dirname,
+        "../../modules/conversation/src/index.ts",
+      ),
       "@llm-table/poker": path.resolve(__dirname, "../../modules/poker/src/index.ts"),
       "@llm-table/rpg": path.resolve(__dirname, "../../modules/rpg/src/index.ts"),
     },
   },
   server: {
+    host: "127.0.0.1",
     port: 5173,
-    proxy: {
-      "/api": {
-        target: "http://localhost:8787",
-        changeOrigin: true,
-      },
-      "/ws": {
-        target: "ws://localhost:8787",
-        ws: true,
-      },
-    },
+    strictPort: true,
   },
 });

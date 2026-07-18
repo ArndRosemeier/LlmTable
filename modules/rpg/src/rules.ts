@@ -39,10 +39,11 @@ function appendMessage(
   state: TableState,
   participantId: ParticipantId,
   content: string,
-  extras?: { imageDataUrl?: string },
+  extras?: { imageDataUrl?: string; imagePrompt?: string },
 ): TableState {
   const actor = requireParticipant(state, participantId);
   const imageDataUrl = extras?.imageDataUrl?.trim();
+  const imagePrompt = extras?.imagePrompt?.trim();
   return {
     ...state,
     messages: [
@@ -54,6 +55,7 @@ function appendMessage(
         content,
         createdAt: new Date().toISOString(),
         ...(imageDataUrl ? { imageDataUrl } : {}),
+        ...(imageDataUrl && imagePrompt ? { imagePrompt } : {}),
       },
     ],
   };
@@ -94,6 +96,7 @@ export function buildInitialRpgState(
     pendingCheck: null,
     lastRoll: null,
     preferGmNext: true,
+    raisedHandParticipantId: null,
     gmParticipantId: gm.id,
     transcriptSummary: "",
     summaryThroughMessageCount: 0,
@@ -157,6 +160,8 @@ function applyGmAction(state: TableState, action: Extract<ClientAction, { type: 
     rpg = { ...rpg, party };
   }
 
+  const imageDataUrl = action.imageDataUrl?.trim();
+  const imagePrompt = action.imagePrompt?.trim();
   let withNarration = appendMessage(
     {
       ...state,
@@ -167,8 +172,11 @@ function applyGmAction(state: TableState, action: Extract<ClientAction, { type: 
     },
     actorId,
     narration,
-    action.imageDataUrl?.trim()
-      ? { imageDataUrl: action.imageDataUrl.trim() }
+    imageDataUrl
+      ? {
+          imageDataUrl,
+          ...(imagePrompt ? { imagePrompt } : {}),
+        }
       : undefined,
   );
 
@@ -260,12 +268,18 @@ function applyPcSay(
 
   const rpg = requireRpg(state);
   const line = action.isAction ? `*${content}*` : content;
+  const clearedHand =
+    rpg.raisedHandParticipantId === actorId ? null : rpg.raisedHandParticipantId;
 
   return appendMessage(
     {
       ...state,
       phase: "running",
-      moduleState: { ...rpg, preferGmNext: true },
+      moduleState: {
+        ...rpg,
+        preferGmNext: true,
+        raisedHandParticipantId: clearedHand,
+      },
       activeSpeakerId: null,
       error: null,
       statusMessage: action.isAction
@@ -277,6 +291,70 @@ function applyPcSay(
   );
 }
 
+function applyRaiseHand(state: TableState, actorId: ParticipantId): TableState {
+  const actor = requireParticipant(state, actorId);
+  if (actor.kind !== "human") {
+    throw new Error("Only a human can raise a hand");
+  }
+  if (actor.tableRole === "gm") {
+    throw new Error("The GM cannot raise a hand");
+  }
+  if (state.phase !== "running" && state.phase !== "paused") {
+    throw new Error(`Cannot raise hand while session phase is "${state.phase}"`);
+  }
+
+  const rpg = requireRpg(state);
+  if (rpg.raisedHandParticipantId === actorId) {
+    return state;
+  }
+
+  return {
+    ...state,
+    moduleState: {
+      ...rpg,
+      raisedHandParticipantId: actorId,
+    },
+    error: null,
+    statusMessage: rpg.preferGmNext
+      ? `${actor.displayName} raised a hand — waiting for a player turn`
+      : `${actor.displayName} raised a hand`,
+  };
+}
+
+function applyLowerHand(state: TableState, actorId: ParticipantId): TableState {
+  const actor = requireParticipant(state, actorId);
+  if (actor.kind !== "human") {
+    throw new Error("Only a human can lower a hand");
+  }
+
+  const rpg = requireRpg(state);
+  const awaitingSelf =
+    rpg.advance.mode === "awaiting_human" && rpg.advance.speakerId === actorId;
+  const hadHand = rpg.raisedHandParticipantId === actorId;
+
+  if (!hadHand && !awaitingSelf) {
+    return state;
+  }
+
+  const advance = awaitingSelf
+    ? { speakerId: null, mode: "idle" as const }
+    : rpg.advance;
+
+  return {
+    ...state,
+    moduleState: {
+      ...rpg,
+      raisedHandParticipantId: hadHand ? null : rpg.raisedHandParticipantId,
+      advance,
+    },
+    activeSpeakerId: awaitingSelf ? null : state.activeSpeakerId,
+    error: null,
+    statusMessage: awaitingSelf
+      ? `${actor.displayName} lowered their hand — continuing`
+      : `${actor.displayName} lowered their hand`,
+  };
+}
+
 export function createRpgRules(): RulesEngine {
   return {
     apply(state, action: ClientAction, actorId: ParticipantId): TableState {
@@ -285,6 +363,12 @@ export function createRpgRules(): RulesEngine {
       }
       if (action.type === "rpg.say") {
         return applyPcSay(state, action, actorId);
+      }
+      if (action.type === "rpg.raiseHand") {
+        return applyRaiseHand(state, actorId);
+      }
+      if (action.type === "rpg.lowerHand") {
+        return applyLowerHand(state, actorId);
       }
       if (action.type === "chat.say") {
         // Allow human rail comments as plain say mapped to rpg.say dialogue

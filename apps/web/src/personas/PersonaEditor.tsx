@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { OpenRouterModel, PersonaDraft } from "@llm-table/shared";
 import { ModelSelect } from "../components/ModelSelect";
-import { generatePersonaPortrait } from "../lib/api";
+import { buildPersonaPortraitPrompt, generateImage } from "../lib/openrouter";
 
 export interface PersonaEditorProps {
   personas: PersonaDraft[];
@@ -79,13 +79,17 @@ export function PersonaEditor({
 
     setGeneratingId(persona.id);
     try {
-      const portraitDataUrl = await generatePersonaPortrait({
+      const prompt = buildPersonaPortraitPrompt(
+        persona.displayName,
+        persona.systemPrompt,
+      );
+      const { dataUrl } = await generateImage({
         apiKey: apiKey.trim(),
         model: imageModel.trim(),
-        displayName: persona.displayName,
-        systemPrompt: persona.systemPrompt,
+        prompt,
+        aspectRatio: "1:1",
       });
-      update(persona.id, { portraitDataUrl });
+      update(persona.id, { portraitDataUrl: dataUrl });
     } catch (err) {
       setPortraitError(err instanceof Error ? err.message : String(err));
     } finally {

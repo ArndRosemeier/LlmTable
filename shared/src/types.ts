@@ -20,7 +20,6 @@ export interface Participant {
   displayName: string;
   persona?: PersonaDefinition;
   seatIndex: number;
-  connectionId?: string;
   tableRole?: TableRole;
 }
 
@@ -32,6 +31,8 @@ export interface ChatMessage {
   createdAt: string;
   /** Optional inline image (data URL) shown with the message, e.g. GM scene art. */
   imageDataUrl?: string;
+  /** Prompt used to generate imageDataUrl, when known. */
+  imagePrompt?: string;
 }
 
 export interface TableState {
@@ -45,6 +46,8 @@ export interface TableState {
   coordinatorModel: string;
   /** OpenRouter image model for GM scene art (RPG). */
   imageModel?: string;
+  /** RPG: when false, GM must not request / receive scene pictures. */
+  gmImagesEnabled?: boolean;
   error?: string | null;
   statusMessage?: string | null;
 }
@@ -83,4 +86,6 @@ export interface CreateSessionRequest {
   gmPersonaId?: string;
   /** OpenRouter image model used when the GM shows a picture. */
   imageModel?: string;
+  /** RPG: whether the GM is allowed to show pictures this session. */
+  gmImagesEnabled?: boolean;
 }

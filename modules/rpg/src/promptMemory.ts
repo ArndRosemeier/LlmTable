@@ -1,10 +1,65 @@
 import type { CoordinatorDeps, TableState } from "@llm-table/shared";
 import { extractXmlTag } from "@llm-table/shared";
 import { getAdventureSeed } from "./seeds.js";
-import { isRpgState, type RpgState } from "./types.js";
+import {
+  isRpgState,
+  type RpgAdvanceState,
+  type RpgPreparationPhase,
+  type RpgPreparationProgress,
+  type RpgState,
+} from "./types.js";
 
 export const SUMMARY_EVERY_MESSAGES = 25;
 export const SUMMARY_MAX_CHARS = 2000;
+
+function normalizePreparationProgress(
+  value: unknown,
+): RpgPreparationProgress | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const raw = value as Partial<RpgPreparationProgress>;
+  const phase: RpgPreparationPhase | null =
+    raw.phase === "choosing_speaker" ||
+    raw.phase === "generating_turn" ||
+    raw.phase === "creating_image" ||
+    raw.phase === "finalizing"
+      ? raw.phase
+      : null;
+  if (!phase || typeof raw.detail !== "string") {
+    return undefined;
+  }
+
+  const progress: RpgPreparationProgress = {
+    phase,
+    detail: raw.detail,
+  };
+  if (typeof raw.receivedBytes === "number" && Number.isFinite(raw.receivedBytes)) {
+    progress.receivedBytes = Math.max(0, Math.trunc(raw.receivedBytes));
+  }
+  if (typeof raw.receivedChars === "number" && Number.isFinite(raw.receivedChars)) {
+    progress.receivedChars = Math.max(0, Math.trunc(raw.receivedChars));
+  }
+  if (typeof raw.promptTokens === "number" && Number.isFinite(raw.promptTokens)) {
+    progress.promptTokens = Math.max(0, Math.trunc(raw.promptTokens));
+  }
+  if (
+    typeof raw.completionTokens === "number" &&
+    Number.isFinite(raw.completionTokens)
+  ) {
+    progress.completionTokens = Math.max(0, Math.trunc(raw.completionTokens));
+  }
+  if (typeof raw.totalTokens === "number" && Number.isFinite(raw.totalTokens)) {
+    progress.totalTokens = Math.max(0, Math.trunc(raw.totalTokens));
+  }
+  if (
+    typeof raw.imagePartialFrames === "number" &&
+    Number.isFinite(raw.imagePartialFrames)
+  ) {
+    progress.imagePartialFrames = Math.max(0, Math.trunc(raw.imagePartialFrames));
+  }
+  return progress;
+}
 
 export function normalizeRpgState(rpg: RpgState): RpgState {
   const mode = rpg.advance?.mode;
@@ -33,9 +88,25 @@ export function normalizeRpgState(rpg: RpgState): RpgState {
     }
   }
 
+  const advance: RpgAdvanceState = {
+    speakerId:
+      typeof rpg.advance?.speakerId === "string" ? rpg.advance.speakerId : null,
+    mode: advanceMode,
+  };
+  if (advanceMode === "preparing") {
+    const progress = normalizePreparationProgress(rpg.advance?.progress);
+    if (progress) {
+      advance.progress = progress;
+    }
+  }
+
   return {
     ...rpg,
     adventure,
+    raisedHandParticipantId:
+      typeof rpg.raisedHandParticipantId === "string"
+        ? rpg.raisedHandParticipantId
+        : null,
     transcriptSummary:
       typeof rpg.transcriptSummary === "string" ? rpg.transcriptSummary : "",
     summaryThroughMessageCount:
@@ -43,11 +114,7 @@ export function normalizeRpgState(rpg: RpgState): RpgState {
       Number.isFinite(rpg.summaryThroughMessageCount)
         ? Math.max(0, Math.trunc(rpg.summaryThroughMessageCount))
         : 0,
-    advance: {
-      speakerId:
-        typeof rpg.advance?.speakerId === "string" ? rpg.advance.speakerId : null,
-      mode: advanceMode,
-    },
+    advance,
   };
 }
 

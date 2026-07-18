@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { OpenRouterModel, ParticipantId, TableState } from "@llm-table/shared";
-import { fetchImageModels, fetchModels, fetchSession } from "./lib/api";
+import { listImageModels, listModels } from "./lib/openrouter";
+import { LocalSessionController } from "./lib/localSession";
 import {
-  clearActiveSession,
-  loadActiveSession,
+  BackupCancelledError,
   loadApiKey,
+  loadBackupFromFile,
   loadCoordinatorModel,
   loadImageModel,
-  saveActiveSession,
   saveApiKey,
+  saveBackupToFile,
   saveCoordinatorModel,
   saveImageModel,
 } from "./lib/storage";
-import { SessionSocket } from "./lib/sessionSocket";
 import { Lobby } from "./lobby/Lobby";
 import { getVisualization } from "./modules/registry";
 import { OpenRouterSettings } from "./settings/OpenRouterSettings";
@@ -27,56 +27,33 @@ export function App() {
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [localParticipantId, setLocalParticipantId] = useState<ParticipantId | null>(null);
   const [state, setState] = useState<TableState | null>(null);
-  const [socketError, setSocketError] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [readOnly, setReadOnly] = useState(false);
   const [restoringSession, setRestoringSession] = useState(true);
 
-  const socketRef = useRef(new SessionSocket());
+  const controllerRef = useRef(new LocalSessionController());
   const apiKeyRef = useRef(apiKey);
   apiKeyRef.current = apiKey;
   const userEditedApiKeyRef = useRef(false);
   const restoredSessionRef = useRef(false);
 
-  const connectToSession = useCallback(
-    (nextSessionId: string, nextLocalParticipantId: string | null, key: string) => {
-      const trimmedKey = key.trim();
-      if (!trimmedKey) {
-        setSocketError("OpenRouter API key required to join. Save your key in settings first.");
-        setSessionId(null);
-        setState(null);
-        setLocalParticipantId(null);
-        return;
-      }
+  const syncFromController = useCallback(() => {
+    const c = controllerRef.current;
+    setSessionId(c.sessionId);
+    setLocalParticipantId(c.humanParticipantId);
+    setState(c.state);
+    setReadOnly(c.readOnly);
+    setSessionError(c.error);
+  }, []);
 
-      setSocketError(null);
-      setSessionId(nextSessionId);
-      setLocalParticipantId(nextLocalParticipantId);
-      void saveActiveSession({
-        sessionId: nextSessionId,
-        localParticipantId: nextLocalParticipantId,
-      });
-      socketRef.current.connect(nextSessionId, trimmedKey, nextLocalParticipantId, {
-        onState: (next, localId) => {
-          setState(next);
-          setLocalParticipantId(localId);
-        },
-        onError: (message) => {
-          setSocketError(message);
-          if (message.toLowerCase().includes("api key")) {
-            setSessionId(null);
-            setState(null);
-            setLocalParticipantId(null);
-            void clearActiveSession();
-          }
-        },
-        onClose: () => setSocketError("Disconnected from session"),
-      });
-    },
-    [],
-  );
+  useEffect(() => {
+    return controllerRef.current.subscribe(syncFromController);
+  }, [syncFromController]);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,7 +66,6 @@ export function App() {
       if (cancelled) {
         return;
       }
-      // Never clobber a key the user already typed/saved in this session.
       setApiKey((current) => (userEditedApiKeyRef.current || current.trim() ? current : key));
       setCoordinatorModel((current) => (current.trim() ? current : model));
       setImageModel((current) => (current.trim() ? current : imgModel));
@@ -110,32 +86,25 @@ export function App() {
 
     let cancelled = false;
     void (async () => {
-      // Read key from IDB at join time — avoid racing with mid-typing state.
       const storedKey = (await loadApiKey()).trim();
       const key = storedKey || apiKeyRef.current.trim();
-      if (!key) {
-        setRestoringSession(false);
-        return;
-      }
-
-      const active = await loadActiveSession();
-      if (cancelled) {
-        return;
-      }
-      if (!active) {
-        setRestoringSession(false);
-        return;
+      if (key) {
+        controllerRef.current.setApiKey(key);
       }
 
       try {
-        await fetchSession(active.sessionId);
+        const loaded = await controllerRef.current.loadActive();
         if (cancelled) {
           return;
         }
-        restoredSessionRef.current = true;
-        connectToSession(active.sessionId, active.localParticipantId, key);
-      } catch {
-        await clearActiveSession();
+        if (loaded) {
+          restoredSessionRef.current = true;
+          syncFromController();
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setSessionError(err instanceof Error ? err.message : String(err));
+        }
       } finally {
         if (!cancelled) {
           setRestoringSession(false);
@@ -146,7 +115,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [settingsReady, connectToSession]);
+  }, [settingsReady, syncFromController]);
 
   const reloadModels = useCallback(async (key: string) => {
     if (!key.trim()) {
@@ -159,8 +128,8 @@ export function App() {
     setModelsError(null);
     try {
       const [list, imageList] = await Promise.all([
-        fetchModels(key.trim()),
-        fetchImageModels(key.trim()),
+        listModels(key.trim()),
+        listImageModels(key.trim()),
       ]);
       setModels(list);
       setImageModels(imageList);
@@ -198,17 +167,10 @@ export function App() {
       return;
     }
     void reloadModels(apiKey);
-    // intentionally only on settingsReady — not on every apiKey keystroke
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsReady, reloadModels]);
 
-  useEffect(() => {
-    return () => {
-      socketRef.current.close();
-    };
-  }, []);
-
-  async function handleSaveSettings(): Promise<void> {
+  async function handleRefreshModels(): Promise<void> {
     const trimmed = apiKey.trim();
     userEditedApiKeyRef.current = true;
     await saveApiKey(trimmed);
@@ -216,31 +178,71 @@ export function App() {
     await saveImageModel(imageModel);
     setApiKey(trimmed);
     apiKeyRef.current = trimmed;
-    setSavedFlash(true);
-    window.setTimeout(() => setSavedFlash(false), 1500);
+    controllerRef.current.setApiKey(trimmed);
     await reloadModels(trimmed);
   }
 
-  function handleSessionCreated(payload: {
-    sessionId: string;
-    localParticipantId: string | null;
-    apiKey: string;
-  }): void {
-    connectToSession(payload.sessionId, payload.localParticipantId, payload.apiKey);
+  async function handleSaveAll(): Promise<void> {
+    setBackupBusy(true);
+    setSessionError(null);
+    try {
+      const trimmed = apiKey.trim();
+      await saveApiKey(trimmed);
+      await saveCoordinatorModel(coordinatorModel);
+      await saveImageModel(imageModel);
+      setApiKey(trimmed);
+      apiKeyRef.current = trimmed;
+      controllerRef.current.setApiKey(trimmed);
+      // Include the live table (messages, phase, module state) in the backup.
+      await controllerRef.current.flushToStorage();
+      await saveBackupToFile();
+      setSavedFlash(true);
+      window.setTimeout(() => setSavedFlash(false), 1500);
+    } catch (err) {
+      if (!(err instanceof BackupCancelledError)) {
+        setSessionError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setBackupBusy(false);
+    }
   }
 
-  function leaveSession(): void {
-    try {
-      socketRef.current.send({ type: "session.pause" });
-    } catch {
-      // socket may already be closed
+  async function handleLoadAll(): Promise<void> {
+    const confirmed = window.confirm(
+      "Load all replaces every local setting, lobby draft, custom seed, and session with the backup file. Continue?",
+    );
+    if (!confirmed) {
+      return;
     }
-    socketRef.current.close();
-    setSessionId(null);
-    setState(null);
-    setLocalParticipantId(null);
-    setSocketError(null);
-    void clearActiveSession();
+
+    setBackupBusy(true);
+    setSessionError(null);
+    try {
+      if (sessionId) {
+        await controllerRef.current.leave();
+      }
+      await loadBackupFromFile();
+      window.location.reload();
+    } catch (err) {
+      if (!(err instanceof BackupCancelledError)) {
+        setSessionError(err instanceof Error ? err.message : String(err));
+      }
+      setBackupBusy(false);
+    }
+  }
+
+  async function handleSessionCreated(request: Parameters<LocalSessionController["create"]>[0]): Promise<void> {
+    setSessionError(null);
+    controllerRef.current.setApiKey(request.apiKey.trim());
+    await controllerRef.current.create(request);
+    restoredSessionRef.current = true;
+    syncFromController();
+  }
+
+  async function leaveSession(): Promise<void> {
+    await controllerRef.current.leave();
+    setSessionError(null);
+    syncFromController();
   }
 
   const Visualization = useMemo(
@@ -251,7 +253,7 @@ export function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="brand" onClick={() => (sessionId ? leaveSession() : undefined)}>
+        <div className="brand" onClick={() => (sessionId ? void leaveSession() : undefined)}>
           <span className="brand-mark">LlmTable</span>
         </div>
         <OpenRouterSettings
@@ -262,6 +264,7 @@ export function App() {
           imageModels={imageModels}
           loadingModels={loadingModels}
           savedFlash={savedFlash}
+          backupBusy={backupBusy}
           onApiKeyChange={(value) => {
             userEditedApiKeyRef.current = true;
             setApiKey(value);
@@ -274,14 +277,23 @@ export function App() {
             setImageModel(id);
             void saveImageModel(id);
           }}
-          onSave={() => {
-            void handleSaveSettings();
+          onRefreshModels={() => {
+            void handleRefreshModels();
+          }}
+          onSaveAll={() => {
+            void handleSaveAll();
+          }}
+          onLoadAll={() => {
+            void handleLoadAll();
           }}
         />
       </header>
 
       {modelsError && !sessionId ? <p className="error-banner">{modelsError}</p> : null}
-      {socketError ? <p className="error-banner">{socketError}</p> : null}
+      {sessionError ? <p className="error-banner">{sessionError}</p> : null}
+      {readOnly && sessionId ? (
+        <p className="error-banner">This session is open in another tab (read-only here).</p>
+      ) : null}
 
       <main className={sessionId && state ? "app-main app-main-session" : "app-main"}>
         {!settingsReady || restoringSession ? (
@@ -300,33 +312,71 @@ export function App() {
             <Visualization
               state={state}
               localParticipantId={localParticipantId}
-              onAction={(action) =>
-                socketRef.current.send({ type: "action.submit", action })
-              }
+              onAction={(action) => {
+                if (readOnly) {
+                  return;
+                }
+                void controllerRef.current.submitAction(action).catch((err) => {
+                  setSessionError(err instanceof Error ? err.message : String(err));
+                });
+              }}
               onStart={() => {
                 if (!apiKeyRef.current.trim()) {
-                  setSocketError("Save your OpenRouter API key before starting");
+                  setSessionError("Save your OpenRouter API key before starting");
                   return;
                 }
-                socketRef.current.send({
-                  type: "session.start",
-                  apiKey: apiKeyRef.current.trim(),
+                if (readOnly) {
+                  return;
+                }
+                controllerRef.current.setApiKey(apiKeyRef.current.trim());
+                void controllerRef.current.start().catch((err) => {
+                  setSessionError(err instanceof Error ? err.message : String(err));
                 });
               }}
-              onPause={() => socketRef.current.send({ type: "session.pause" })}
+              onPause={() => {
+                if (readOnly) {
+                  return;
+                }
+                controllerRef.current.pause();
+              }}
               onResume={() => {
                 if (!apiKeyRef.current.trim()) {
-                  setSocketError("Save your OpenRouter API key before resuming");
+                  setSessionError("Save your OpenRouter API key before resuming");
                   return;
                 }
-                socketRef.current.send({
-                  type: "session.resume",
-                  apiKey: apiKeyRef.current.trim(),
+                if (readOnly) {
+                  return;
+                }
+                controllerRef.current.setApiKey(apiKeyRef.current.trim());
+                void controllerRef.current.resume().catch((err) => {
+                  setSessionError(err instanceof Error ? err.message : String(err));
                 });
               }}
-              onStop={leaveSession}
-              onNextHand={() => socketRef.current.send({ type: "poker.nextHand" })}
-              onAdvance={() => socketRef.current.send({ type: "rpg.advance" })}
+              onStop={() => {
+                void leaveSession();
+              }}
+              onNextHand={() => {
+                if (readOnly) {
+                  return;
+                }
+                void controllerRef.current.continuePokerNextHand().catch((err) => {
+                  setSessionError(err instanceof Error ? err.message : String(err));
+                });
+              }}
+              onAdvance={() => {
+                if (readOnly) {
+                  return;
+                }
+                void controllerRef.current.advanceRpg().catch((err) => {
+                  setSessionError(err instanceof Error ? err.message : String(err));
+                });
+              }}
+              onSetGmImages={(enabled) => {
+                if (readOnly) {
+                  return;
+                }
+                controllerRef.current.setGmImages(enabled, imageModel.trim() || undefined);
+              }}
             />
           </div>
         )}

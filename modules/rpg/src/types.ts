@@ -38,6 +38,25 @@ export interface RpgPublicSeed {
   premise: string;
 }
 
+export type RpgPreparationPhase =
+  | "choosing_speaker"
+  | "generating_turn"
+  | "creating_image"
+  | "finalizing";
+
+/** Live prepare telemetry from the server (streaming chat / image). */
+export interface RpgPreparationProgress {
+  phase: RpgPreparationPhase;
+  detail: string;
+  receivedBytes?: number;
+  receivedChars?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  /** SSE image preview frames when the image provider streams them. */
+  imagePartialFrames?: number;
+}
+
 export interface RpgAdvanceState {
   /** Speaker whose line will be revealed on Next (or who must act if human). */
   speakerId: ParticipantId | null;
@@ -48,6 +67,8 @@ export interface RpgAdvanceState {
    * awaiting_human — human must act (no Next)
    */
   mode: "idle" | "preparing" | "ready" | "awaiting_human";
+  /** Present while mode is preparing; cleared when ready/idle. */
+  progress?: RpgPreparationProgress;
 }
 
 export interface RpgState {
@@ -64,6 +85,11 @@ export interface RpgState {
   lastRoll: RpgLastRoll | null;
   /** Prefer GM on the next coordinator pick when true. */
   preferGmNext: boolean;
+  /**
+   * Human PC who raised their hand. On the next non-GM (player) pick, they are
+   * spotlighted instead of an LLM PC. Ignored while preferGmNext / GM is owed.
+   */
+  raisedHandParticipantId: ParticipantId | null;
   gmParticipantId: ParticipantId;
   /** Rolling transcript summary for LLM prompts only (UI keeps full messages). */
   transcriptSummary: string;

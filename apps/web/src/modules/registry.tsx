@@ -16,6 +16,8 @@ export interface VisualizationProps {
   onNextHand?: () => void;
   /** RPG: reveal the next prefetched speaker line. */
   onAdvance?: () => void;
+  /** RPG: toggle GM scene pictures mid-session. */
+  onSetGmImages?: (enabled: boolean) => void;
 }
 
 const visualizations = new Map<string, ComponentType<VisualizationProps>>([

@@ -10,6 +10,7 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
+    "@llm-table/conversation": "*",
     "@llm-table/poker": "*",
     "@llm-table/rpg": "*",
     "@llm-table/shared": "*",

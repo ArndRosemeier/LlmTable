@@ -1,35 +1,4 @@
-import type { ParticipantId, SessionId, TableState } from "./types.js";
-
-export type ClientToServerMessage =
-  | {
-      type: "session.join";
-      sessionId: SessionId;
-      apiKey: string;
-      participantId?: ParticipantId;
-    }
-  | {
-      type: "session.start";
-      apiKey: string;
-    }
-  | {
-      type: "action.submit";
-      action: ClientAction;
-    }
-  | {
-      type: "session.pause";
-    }
-  | {
-      type: "session.resume";
-      apiKey: string;
-    }
-  | {
-      /** Poker: deal the next hand after the between-hands review pause. */
-      type: "poker.nextHand";
-    }
-  | {
-      /** RPG: reveal the next prefetched (or awaited) LLM line. */
-      type: "rpg.advance";
-    };
+import type { ParticipantId } from "./types.js";
 
 export type PokerBetAction = "fold" | "check" | "call" | "bet" | "raise";
 
@@ -53,6 +22,14 @@ export type ClientAction =
       isAction?: boolean;
     }
   | {
+      /** Queue the human PC for the next non-GM spotlight (coordinator pick). */
+      type: "rpg.raiseHand";
+    }
+  | {
+      /** Cancel a queued hand; if already spotlighted, yields the turn. */
+      type: "rpg.lowerHand";
+    }
+  | {
       type: "rpg.gm";
       narration: string;
       sceneSummary?: string;
@@ -65,27 +42,10 @@ export type ClientAction =
       hpUpdates?: Array<{ participantId: ParticipantId; hp: number }>;
       clockDelta?: number;
       /**
-       * Optional image-generation prompt. Server fills imageDataUrl before apply
-       * when an image model is configured.
+       * Optional image-generation prompt. Filled to imageDataUrl before apply
+       * when an image model is configured and GM pictures are enabled.
        */
       imagePrompt?: string;
-      /** data:image/...;base64,... produced by the server for the party chat. */
+      /** data:image/...;base64,... produced for the party chat. */
       imageDataUrl?: string;
-    };
-
-export type ServerToClientMessage =
-  | {
-      type: "session.updated";
-      state: TableState;
-      localParticipantId: ParticipantId | null;
-    }
-  | {
-      type: "session.error";
-      message: string;
-    }
-  | {
-      type: "session.created";
-      sessionId: SessionId;
-      state: TableState;
-      localParticipantId: ParticipantId | null;
     };

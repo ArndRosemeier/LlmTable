@@ -14,13 +14,8 @@ interface CoordinatorChoice {
 }
 
 function eligibleParticipants(state: TableState) {
-  return state.participants.filter((p) => {
-    if (p.kind === "llm") {
-      return true;
-    }
-    // Connected humans can be invited to speak; they may pass by staying silent.
-    return typeof p.connectionId === "string" && p.connectionId.length > 0;
-  });
+  // Local single-human app: every seated human is always eligible (no socket binding).
+  return state.participants.filter((p) => p.kind === "llm" || p.kind === "human");
 }
 
 function formatTranscript(state: TableState): string {

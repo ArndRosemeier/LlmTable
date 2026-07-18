@@ -1,6 +1,6 @@
 # LlmTable
 
-A modular gaming-table app where LLM personas sit around a table. Proof of concept: free conversation with an LLM coordinator (OpenRouter).
+A modular gaming-table app where LLM personas sit around a table. Conversation, Texas Hold'em, and theater-of-the-mind RPG — all in the browser. Uses your OpenRouter API key.
 
 ## Setup
 
@@ -11,30 +11,32 @@ npm install
 ## Run
 
 ```bash
-# Terminal 1 — API + WebSocket
-npm run dev:server
-
-# Terminal 2 — Vite UI
-npm run dev:web
+npm run dev
 ```
 
-Open http://localhost:5173. Set your OpenRouter API key in the header settings (stored in browser IndexedDB; sent to the server in memory for that session).
+Or double-click `start.bat` (stops any previous Vite instance, then starts one).
+
+Open http://localhost:5173. Set your OpenRouter API key in the header settings.
 
 ## Architecture
 
-- `shared/` — table state, protocol, module contracts
+- `shared/` — table state, actions, module contracts
 - `modules/conversation/` — conversation rules + LLM coordinator
-- `modules/poker/` — Texas Hold'em rules + heuristic (seat-order) coordinator + play/talk LLM turns
-- `apps/server/` — Hono REST + WebSocket orchestrator
-- `apps/web/` — lobby, persona editor, swappable table visualizations
+- `modules/poker/` — Texas Hold'em rules + coordinator + play/talk LLM turns
+- `modules/rpg/` — RPG rules, seeds, coordinator, GM/PC turns
+- `apps/web/` — lobby, persona editor, table UI, local orchestration
 
-Each game module swaps **visualization**, **rules**, and **coordinator**. Personas stay game-agnostic; poker knowledge is a rule overlay on top.
+Everything runs in the browser. There is no separate API server. OpenRouter is called directly from the client.
 
 ## Persistence
 
-- **Server**: SQLite at `apps/server/data/llm-table.sqlite` (sessions, messages, participants, API key for that session). Survives restarts; running tables come back paused.
-- **Browser**: IndexedDB (`llm-table`) for API key, coordinator model, lobby persona drafts, and the active session id for reconnect.
+All durable state is in IndexedDB (`llm-table`):
+
+- settings (API key, coordinator model, image model)
+- lobby draft (personas, invites, module choice)
+- custom adventure seeds
+- full session snapshots + active session id
 
 ## Security note
 
-The OpenRouter key is stored in browser IndexedDB and also on the server SQLite row for that session (local PoC convenience). Do not treat this as production secret handling.
+Your OpenRouter key is stored in browser IndexedDB and used from the page for API calls. Do not treat this as production secret handling; anyone with access to the browser profile can read it.

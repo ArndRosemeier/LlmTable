@@ -6,8 +6,8 @@ import {
   isBuiltinAdventureSeedId,
   resolveAdventureSeed,
 } from "@llm-table/rpg";
+import type { CreateSessionRequest } from "@llm-table/shared";
 import { PersonaEditor } from "../personas/PersonaEditor";
-import { createSession } from "../lib/api";
 import {
   loadCustomAdventureSeeds,
   loadLobbyDraft,
@@ -41,11 +41,7 @@ export interface LobbyProps {
   imageModel: string;
   models: OpenRouterModel[];
   modelsError: string | null;
-  onSessionCreated: (payload: {
-    sessionId: string;
-    localParticipantId: string | null;
-    apiKey: string;
-  }) => void;
+  onSessionCreated: (request: CreateSessionRequest) => void | Promise<void>;
 }
 
 export function Lobby({
@@ -250,7 +246,7 @@ export function Lobby({
               adventureSeed: selectedSeed,
             })
           : undefined;
-      const result = await createSession({
+      await onSessionCreated({
         apiKey: apiKey.trim(),
         coordinatorModel: coordinatorModel.trim(),
         personas: invitedPersonas,
@@ -259,12 +255,10 @@ export function Lobby({
         adventureSeedId: moduleId === "rpg" ? adventureSeedId : undefined,
         adventureSeed,
         gmPersonaId: moduleId === "rpg" ? gmPersonaId : undefined,
-        imageModel: moduleId === "rpg" && imageModel.trim() ? imageModel.trim() : undefined,
-      });
-      onSessionCreated({
-        sessionId: result.sessionId,
-        localParticipantId: result.localParticipantId,
-        apiKey: apiKey.trim(),
+        /** Default on; toggle mid-session from the chat panel. */
+        gmImagesEnabled: moduleId === "rpg" ? true : undefined,
+        imageModel:
+          moduleId === "rpg" && imageModel.trim() ? imageModel.trim() : undefined,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -292,20 +286,22 @@ export function Lobby({
         </div>
         <div className="lobby-pickers">
           {moduleId === "rpg" ? (
-            <label className="field gm-picker">
-              <span>Game Master</span>
-              <select
-                value={gmPersonaId}
-                onChange={(e) => setGmPersonaId(e.target.value)}
-                disabled={invitedPersonas.length === 0}
-              >
-                {invitedPersonas.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.displayName.trim() || "Unnamed persona"}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <>
+              <label className="field gm-picker">
+                <span>Game Master</span>
+                <select
+                  value={gmPersonaId}
+                  onChange={(e) => setGmPersonaId(e.target.value)}
+                  disabled={invitedPersonas.length === 0}
+                >
+                  {invitedPersonas.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.displayName.trim() || "Unnamed persona"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
           ) : null}
           <label className="field module-picker">
             <span>Table module</span>
