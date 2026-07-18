@@ -1,15 +1,17 @@
-import type { PersonaDraft } from "@llm-table/shared";
+import type { AdventureSeed, PersonaDraft } from "@llm-table/shared";
 
 const DB_NAME = "llm-table";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const SETTINGS_STORE = "settings";
 const LOBBY_STORE = "lobby";
+const SEEDS_STORE = "adventureSeeds";
 
 const KEY_API = "openrouter.apiKey";
 const KEY_COORDINATOR_MODEL = "openrouter.coordinatorModel";
 const KEY_IMAGE_MODEL = "openrouter.imageModel";
 const KEY_LOBBY_DRAFT = "draft";
 const KEY_ACTIVE_SESSION = "activeSession";
+const KEY_CUSTOM_SEEDS = "custom";
 
 export interface LobbyDraft {
   personas: PersonaDraft[];
@@ -18,6 +20,9 @@ export interface LobbyDraft {
   joinAsHuman: boolean;
   humanName: string;
   moduleId?: string;
+  adventureSeedId?: string;
+  /** RPG: invited persona id assigned as GM. */
+  gmPersonaId?: string;
 }
 
 export interface ActiveSessionRef {
@@ -44,6 +49,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(LOBBY_STORE)) {
         db.createObjectStore(LOBBY_STORE);
+      }
+      if (!db.objectStoreNames.contains(SEEDS_STORE)) {
+        db.createObjectStore(SEEDS_STORE);
       }
     };
   });
@@ -221,4 +229,20 @@ export async function saveActiveSession(ref: ActiveSessionRef): Promise<void> {
 export async function clearActiveSession(): Promise<void> {
   await ensureMigrated();
   await idbDelete(LOBBY_STORE, KEY_ACTIVE_SESSION);
+}
+
+export async function loadCustomAdventureSeeds(): Promise<AdventureSeed[]> {
+  await ensureMigrated();
+  const seeds = await idbGet<AdventureSeed[]>(SEEDS_STORE, KEY_CUSTOM_SEEDS);
+  if (!Array.isArray(seeds)) {
+    return [];
+  }
+  return seeds.filter(
+    (s) => s && typeof s === "object" && typeof s.id === "string" && typeof s.title === "string",
+  );
+}
+
+export async function saveCustomAdventureSeeds(seeds: AdventureSeed[]): Promise<void> {
+  await ensureMigrated();
+  await idbPut(SEEDS_STORE, KEY_CUSTOM_SEEDS, seeds);
 }

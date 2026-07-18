@@ -1,16 +1,26 @@
 import type {
+  ClientAction,
   CreateSessionRequest,
   Participant,
   ParticipantId,
   SessionId,
   TableState,
 } from "@llm-table/shared";
+import { buildInitialRpgState, resolveAdventureSeed } from "@llm-table/rpg";
 import type { WebSocket } from "ws";
 import { loadAllSessions, upsertSession } from "./db.js";
 import { getModule } from "./registry.js";
 
 export interface SessionSecrets {
   apiKey: string;
+}
+
+export interface RpgPrefetchSlot {
+  generation: number;
+  speakerId: ParticipantId;
+  promise: Promise<ClientAction>;
+  action: ClientAction | null;
+  error: string | null;
 }
 
 export interface SessionRecord {
@@ -21,6 +31,10 @@ export interface SessionRecord {
   participantConnections: Map<ParticipantId, string>;
   turnGeneration: number;
   waitingForHuman: ParticipantId | null;
+  /** RPG: prefetched next LLM action waiting for manual advance. */
+  rpgPrefetch: RpgPrefetchSlot | null;
+  /** Prevents double-apply when Next is pressed twice. */
+  rpgAdvanceLock: boolean;
 }
 
 const sessions = new Map<SessionId, SessionRecord>();
@@ -102,6 +116,8 @@ export function loadSessionsFromDisk(): number {
       participantConnections: new Map(),
       turnGeneration: 0,
       waitingForHuman: null,
+      rpgPrefetch: null,
+      rpgAdvanceLock: false,
     };
     sessions.set(row.sessionId, session);
     // Only rewrite if we had to pause a previously running table
@@ -141,19 +157,43 @@ export function createSession(request: CreateSessionRequest): {
   getModule(request.moduleId);
 
   const sessionId = crypto.randomUUID();
-  const participants: Participant[] = request.personas.map((p, index) => ({
-    id: p.id || crypto.randomUUID(),
-    kind: "llm" as const,
-    displayName: p.displayName.trim(),
-    persona: {
-      systemPrompt: p.systemPrompt.trim(),
-      model: p.model.trim(),
-      ...(p.portraitDataUrl?.trim()
-        ? { portraitDataUrl: p.portraitDataUrl.trim() }
-        : {}),
-    },
-    seatIndex: index,
-  }));
+  const isRpg = request.moduleId === "rpg";
+  const adventureSeed = isRpg
+    ? resolveAdventureSeed({
+        adventureSeedId: request.adventureSeedId,
+        adventureSeed: request.adventureSeed,
+      })
+    : null;
+
+  const gmPersonaId = isRpg ? request.gmPersonaId?.trim() : undefined;
+  if (isRpg) {
+    if (!gmPersonaId) {
+      throw new Error("RPG table requires a GM persona");
+    }
+    const gmDraft = request.personas.find((p) => p.id.trim() === gmPersonaId);
+    if (!gmDraft) {
+      throw new Error("GM persona must be one of the invited personas");
+    }
+  }
+
+  const participants: Participant[] = request.personas.map((p, index) => {
+    const id = p.id.trim() || crypto.randomUUID();
+    const isGm = isRpg && id === gmPersonaId;
+    return {
+      id,
+      kind: "llm" as const,
+      displayName: p.displayName.trim(),
+      persona: {
+        systemPrompt: p.systemPrompt.trim(),
+        model: p.model.trim(),
+        ...(p.portraitDataUrl?.trim()
+          ? { portraitDataUrl: p.portraitDataUrl.trim() }
+          : {}),
+      },
+      seatIndex: index,
+      ...(isRpg ? { tableRole: (isGm ? "gm" : "pc") as "gm" | "pc" } : {}),
+    };
+  });
 
   let localParticipantId: ParticipantId | null = null;
   const humanName = request.humanName?.trim();
@@ -164,8 +204,20 @@ export function createSession(request: CreateSessionRequest): {
       kind: "human",
       displayName: humanName,
       seatIndex: participants.length,
+      ...(isRpg ? { tableRole: "pc" as const } : {}),
     });
   }
+
+  if (isRpg) {
+    const pcs = participants.filter((p) => p.tableRole !== "gm");
+    if (pcs.length < 1) {
+      throw new Error("RPG table needs at least one PC besides the GM");
+    }
+  }
+
+  const moduleState = isRpg
+    ? buildInitialRpgState(participants, adventureSeed!)
+    : {};
 
   const state: TableState = {
     sessionId,
@@ -174,10 +226,13 @@ export function createSession(request: CreateSessionRequest): {
     messages: [],
     activeSpeakerId: null,
     phase: "lobby",
-    moduleState: {},
+    moduleState,
     coordinatorModel: request.coordinatorModel.trim(),
+    ...(request.imageModel?.trim() ? { imageModel: request.imageModel.trim() } : {}),
     error: null,
-    statusMessage: "Lobby — start when ready",
+    statusMessage: isRpg
+      ? `${adventureSeed!.title} — lobby`
+      : "Lobby — start when ready",
   };
 
   const session: SessionRecord = {
@@ -187,6 +242,8 @@ export function createSession(request: CreateSessionRequest): {
     participantConnections: new Map(),
     turnGeneration: 0,
     waitingForHuman: null,
+    rpgPrefetch: null,
+    rpgAdvanceLock: false,
   };
 
   sessions.set(sessionId, session);

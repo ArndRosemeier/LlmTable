@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import type { ClientAction, ParticipantId, TableState } from "@llm-table/shared";
 import { ConversationTableView } from "./conversation/ConversationTableView";
 import { PokerTableView } from "./poker/PokerTableView";
+import { RpgTableView } from "./rpg/RpgTableView";
 
 export interface VisualizationProps {
   state: TableState;
@@ -11,11 +12,16 @@ export interface VisualizationProps {
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
+  /** Poker: confirm dealing the next hand after reviewing results. */
+  onNextHand?: () => void;
+  /** RPG: reveal the next prefetched speaker line. */
+  onAdvance?: () => void;
 }
 
 const visualizations = new Map<string, ComponentType<VisualizationProps>>([
   ["conversation", ConversationTableView as ComponentType<VisualizationProps>],
   ["poker", PokerTableView],
+  ["rpg", RpgTableView as ComponentType<VisualizationProps>],
 ]);
 
 export function getVisualization(moduleId: string): ComponentType<VisualizationProps> {

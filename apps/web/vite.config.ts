@@ -8,6 +8,7 @@ export default defineConfig({
     alias: {
       "@llm-table/shared": path.resolve(__dirname, "../../shared/src/index.ts"),
       "@llm-table/poker": path.resolve(__dirname, "../../modules/poker/src/index.ts"),
+      "@llm-table/rpg": path.resolve(__dirname, "../../modules/rpg/src/index.ts"),
     },
   },
   server: {

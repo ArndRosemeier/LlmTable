@@ -13,8 +13,8 @@ export interface ConversationTableViewProps {
 
 function seatPosition(index: number, total: number): { left: string; top: string } {
   const angle = (Math.PI * 2 * index) / total - Math.PI / 2;
-  const x = 50 + Math.cos(angle) * 42;
-  const y = 50 + Math.sin(angle) * 38;
+  const x = 50 + Math.cos(angle) * 48;
+  const y = 50 + Math.sin(angle) * 47;
   return { left: `${x}%`, top: `${y}%` };
 }
 

@@ -1,6 +1,7 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 cd /d "%~dp0"
+set "LLM_TABLE_ROOT=%CD%"
 
 where npm >nul 2>&1
 if errorlevel 1 (
@@ -17,8 +18,11 @@ if not exist "node_modules\" (
   )
 )
 
-call :free_port 8787
-call :free_port 5173
+echo Stopping any previous LlmTable processes...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\stop-dev.ps1"
+if errorlevel 1 (
+  echo Warning: cleanup reported an error; continuing anyway.
+)
 
 echo Starting LlmTable server on http://localhost:8787
 start "LlmTable Server" cmd /k npm run dev:server
@@ -28,14 +32,6 @@ start "LlmTable Web" cmd /k npm run dev:web
 
 echo.
 echo Both windows opened. Open http://localhost:5173 in your browser.
-echo Close those windows to stop the app.
+echo Close those windows to stop the app, or run start.bat again to restart cleanly.
 endlocal
-exit /b 0
-
-:free_port
-set "PORT=%~1"
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
-  echo Port %PORT% is in use by PID %%P — stopping it...
-  taskkill /F /PID %%P >nul 2>&1
-)
 exit /b 0

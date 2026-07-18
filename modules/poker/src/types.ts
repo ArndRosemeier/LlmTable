@@ -9,7 +9,7 @@ export type PokerStreet =
   | "showdown"
   | "betweenHands";
 
-export type PokerPlayerStatus = "active" | "folded" | "allIn";
+export type PokerPlayerStatus = "active" | "folded" | "allIn" | "out";
 
 export interface PokerPlayerState {
   participantId: ParticipantId;
@@ -41,6 +41,10 @@ export interface PokerState {
   players: PokerPlayerState[];
   handNumber: number;
   winners: PokerWinner[];
+  /** LLM winners still owed a post-hand table-talk beat before the next deal. */
+  pendingGloatIds: ParticipantId[];
+  /** True when the hand is over and a human must confirm before dealing again. */
+  awaitingNextHand: boolean;
   lastActionSummary: string | null;
 }
 
@@ -54,4 +58,13 @@ export function isPokerState(value: unknown): value is PokerState {
   }
   const v = value as Partial<PokerState>;
   return Array.isArray(v.players) && typeof v.street === "string";
+}
+
+/** Normalize older persisted states that predate the gloat queue. */
+export function gloatQueue(poker: PokerState): ParticipantId[] {
+  return Array.isArray(poker.pendingGloatIds) ? poker.pendingGloatIds : [];
+}
+
+export function isAwaitingNextHand(poker: PokerState): boolean {
+  return poker.awaitingNextHand === true;
 }

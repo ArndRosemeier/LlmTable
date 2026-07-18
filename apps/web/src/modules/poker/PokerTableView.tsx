@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { ClientAction, ParticipantId, TableState } from "@llm-table/shared";
 import {
   formatCard,
+  isAwaitingNextHand,
   isPokerState,
   legalActions,
   type PokerState,
@@ -16,12 +17,13 @@ export interface PokerTableViewProps {
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
+  onNextHand?: () => void;
 }
 
 function seatPosition(index: number, total: number): { left: string; top: string } {
   const angle = (Math.PI * 2 * index) / total - Math.PI / 2;
-  const x = 50 + Math.cos(angle) * 42;
-  const y = 50 + Math.sin(angle) * 40;
+  const x = 50 + Math.cos(angle) * 48;
+  const y = 50 + Math.sin(angle) * 47;
   return { left: `${x}%`, top: `${y}%` };
 }
 
@@ -33,12 +35,18 @@ export function PokerTableView({
   onPause,
   onResume,
   onStop,
+  onNextHand,
 }: PokerTableViewProps) {
   const [talk, setTalk] = useState("");
   const [raiseTo, setRaiseTo] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const poker: PokerState | null = isPokerState(state.moduleState) ? state.moduleState : null;
+  const canDealNext =
+    poker !== null &&
+    isAwaitingNextHand(poker) &&
+    poker.players.filter((p) => p.stack > 0).length >= 2 &&
+    typeof onNextHand === "function";
   const isMyTurn =
     localParticipantId !== null &&
     poker?.actingParticipantId === localParticipantId &&
@@ -129,9 +137,14 @@ export function PokerTableView({
               Pause
             </button>
           ) : null}
-          {state.phase === "paused" ? (
+          {state.phase === "paused" && !canDealNext ? (
             <button type="button" className="btn" onClick={onResume}>
               Resume
+            </button>
+          ) : null}
+          {canDealNext ? (
+            <button type="button" className="btn" onClick={onNextHand}>
+              Next hand
             </button>
           ) : null}
           <button type="button" className="btn btn-secondary" onClick={onStop}>
@@ -164,6 +177,15 @@ export function PokerTableView({
                     </div>
                   );
                 })}
+                {canDealNext ? (
+                  <button
+                    type="button"
+                    className="btn btn-lg winners-continue"
+                    onClick={onNextHand}
+                  >
+                    Next hand
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -194,16 +216,25 @@ export function PokerTableView({
           const pos = seatPosition(p.seatIndex, state.participants.length);
           const active = state.activeSpeakerId === p.id;
           const ps = poker?.players.find((x) => x.participantId === p.id);
+          const eliminated = ps?.status === "out" || (ps !== undefined && ps.stack <= 0);
           const showCards =
             ps &&
+            !eliminated &&
             (ps.holeCards.length > 0 ||
               (poker &&
                 poker.street !== "betweenHands" &&
                 ps.status !== "folded"));
+          const seatClass = [
+            "seat",
+            active ? "seat-active" : "",
+            eliminated ? "seat-out" : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
           return (
             <div
               key={p.id}
-              className={active ? "seat seat-active" : "seat"}
+              className={seatClass}
               style={{ left: pos.left, top: pos.top }}
             >
               {p.persona?.portraitDataUrl ? (
@@ -215,9 +246,14 @@ export function PokerTableView({
               ) : null}
               <span className="seat-name">{p.displayName}</span>
               <span className="seat-kind">
-                {ps ? `${ps.stack} chips` : p.kind}{" "}
-                {ps?.status === "folded" ? "· folded" : ""}
-                {ps?.betThisStreet ? ` · bet ${ps.betThisStreet}` : ""}
+                {eliminated
+                  ? "Out"
+                  : ps
+                    ? `${ps.stack} chips`
+                    : p.kind}{" "}
+                {!eliminated && ps?.status === "folded" ? "· folded" : ""}
+                {!eliminated && ps?.status === "allIn" ? "· all-in" : ""}
+                {!eliminated && ps?.betThisStreet ? ` · bet ${ps.betThisStreet}` : ""}
               </span>
               {showCards ? (
                 <div className="seat-cards">

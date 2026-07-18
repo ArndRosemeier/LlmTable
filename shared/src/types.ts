@@ -1,7 +1,11 @@
+import type { AdventureSeed } from "./adventure.js";
+
 export type ParticipantId = string;
 export type SessionId = string;
 export type ParticipantKind = "human" | "llm";
 export type SessionPhase = "lobby" | "running" | "paused";
+/** Seat role at an RPG table; omitted for non-RPG modules. */
+export type TableRole = "gm" | "pc";
 
 export interface PersonaDefinition {
   systemPrompt: string;
@@ -17,6 +21,7 @@ export interface Participant {
   persona?: PersonaDefinition;
   seatIndex: number;
   connectionId?: string;
+  tableRole?: TableRole;
 }
 
 export interface ChatMessage {
@@ -25,6 +30,8 @@ export interface ChatMessage {
   displayName: string;
   content: string;
   createdAt: string;
+  /** Optional inline image (data URL) shown with the message, e.g. GM scene art. */
+  imageDataUrl?: string;
 }
 
 export interface TableState {
@@ -36,6 +43,8 @@ export interface TableState {
   phase: SessionPhase;
   moduleState: unknown;
   coordinatorModel: string;
+  /** OpenRouter image model for GM scene art (RPG). */
+  imageModel?: string;
   error?: string | null;
   statusMessage?: string | null;
 }
@@ -63,4 +72,15 @@ export interface CreateSessionRequest {
   personas: PersonaDraft[];
   humanName?: string;
   moduleId: string;
+  /** RPG module: adventure seed id (e.g. haunted-mill, blank). */
+  adventureSeedId?: string;
+  /**
+   * RPG module: full seed payload (built-in or custom).
+   * When set, used instead of looking up adventureSeedId in the built-in catalog.
+   */
+  adventureSeed?: AdventureSeed;
+  /** RPG module: id of the invited persona who runs the table as GM. */
+  gmPersonaId?: string;
+  /** OpenRouter image model used when the GM shows a picture. */
+  imageModel?: string;
 }

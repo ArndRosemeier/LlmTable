@@ -18,10 +18,26 @@ export interface PersistedSessionRow {
 
 mkdirSync(dataDir, { recursive: true });
 
-function openDatabase(): DatabaseSync {
-  const database = new DatabaseSync(dbPath);
+function sleepSync(ms: number): void {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    // spin — only used for short SQLite busy retries during watch restarts
+  }
+}
+
+function isSqliteBusy(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("database is locked") ||
+    message.includes("SQLITE_BUSY") ||
+    message.includes("SQLITE_LOCKED")
+  );
+}
+
+function openDatabaseOnce(): DatabaseSync {
+  const database = new DatabaseSync(dbPath, { timeout: 10_000 });
   database.exec("PRAGMA journal_mode = WAL;");
-  database.exec("PRAGMA busy_timeout = 5000;");
+  database.exec("PRAGMA busy_timeout = 10000;");
   database.exec("PRAGMA synchronous = NORMAL;");
   database.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -35,28 +51,56 @@ function openDatabase(): DatabaseSync {
   return database;
 }
 
-let db = openDatabase();
-
-function sleepSync(ms: number): void {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    // spin — only used for short SQLite busy retries
+/** Open SQLite with retries — common when tsx watch overlaps the previous process. */
+function openDatabase(): DatabaseSync {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      const database = openDatabaseOnce();
+      database.prepare("SELECT 1").get();
+      if (attempt > 0) {
+        console.warn(`SQLite opened after ${attempt + 1} attempt(s)`);
+      }
+      return database;
+    } catch (err) {
+      lastError = err;
+      if (!isSqliteBusy(err)) {
+        throw err;
+      }
+      if (attempt === 0 || attempt % 5 === 4) {
+        console.warn(
+          `SQLite busy while opening (attempt ${attempt + 1}/40) — waiting for previous server…`,
+        );
+      }
+      sleepSync(150 + attempt * 25);
+    }
   }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Failed to open SQLite database: ${String(lastError)}`);
 }
+
+let db = openDatabase();
+let closed = false;
 
 function withRetry<T>(operation: () => T): T {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 8; attempt++) {
     try {
       return operation();
     } catch (err) {
       lastError = err;
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("database is locked") && !message.includes("SQLITE_BUSY")) {
+      if (!isSqliteBusy(err)) {
         throw err;
       }
-      // Brief backoff; common during tsx watch restarts
       sleepSync(50 * (attempt + 1));
+      if (attempt === 3 || attempt === 6) {
+        try {
+          reopenDatabase();
+        } catch {
+          // keep retrying with existing handle
+        }
+      }
     }
   }
   throw lastError;
@@ -164,6 +208,10 @@ export function deleteSession(sessionId: SessionId): void {
 }
 
 export function closeDatabase(): void {
+  if (closed) {
+    return;
+  }
+  closed = true;
   try {
     db.close();
   } catch {
@@ -173,23 +221,11 @@ export function closeDatabase(): void {
 
 function reopenDatabase(): void {
   closeDatabase();
+  closed = false;
   db = openDatabase();
 }
 
-process.on("exit", () => {
+// Best-effort close if the process exits without going through index shutdown.
+process.once("exit", () => {
   closeDatabase();
 });
-
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-  process.on(signal, () => {
-    closeDatabase();
-    process.exit(0);
-  });
-}
-
-// If the previous watch process left a lock, reopen once after a short delay.
-try {
-  db.prepare("SELECT 1").get();
-} catch {
-  reopenDatabase();
-}

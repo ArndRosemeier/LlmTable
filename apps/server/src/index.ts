@@ -1,9 +1,10 @@
-import { serve } from "@hono/node-server";
+import { getRequestListener } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { CreateSessionRequest, ClientToServerMessage } from "@llm-table/shared";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
+import { closeDatabase } from "./db.js";
 import {
   buildPersonaPortraitPrompt,
   generateImage,
@@ -23,12 +24,20 @@ import {
   requireSession,
 } from "./session.js";
 import {
+  advanceRpgSession,
+  continuePokerNextHand,
   pauseSession,
   resumeSession,
   startSession,
   submitAction,
 } from "./orchestrator.js";
 import { listModules } from "./registry.js";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 const PORT = Number(process.env.PORT ?? 8787);
 const restored = loadSessionsFromDisk();
@@ -162,142 +171,240 @@ app.get("/api/sessions/:sessionId", (c) => {
   });
 });
 
-const server = serve({ fetch: app.fetch, port: PORT }, () => {
-  console.log(`LlmTable server listening on http://localhost:${PORT}`);
-});
-
-const wss = new WebSocketServer({
-  server: server as unknown as import("node:http").Server,
-  path: "/ws",
-});
-
 interface SocketContext {
   connectionId: string;
   sessionId: string | null;
   localParticipantId: string | null;
 }
 
-wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
-  const ctx: SocketContext = {
-    connectionId: crypto.randomUUID(),
-    sessionId: null,
-    localParticipantId: null,
-  };
+async function listenWithRetry(): Promise<HttpServer> {
+  let lastError: unknown;
 
-  ws.on("message", (raw) => {
-    void (async () => {
-      let msg: ClientToServerMessage;
-      try {
-        msg = JSON.parse(String(raw)) as ClientToServerMessage;
-      } catch {
-        ws.send(JSON.stringify({ type: "session.error", message: "Invalid JSON message" }));
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const server = createServer(getRequestListener(app.fetch));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (err: Error) => {
+          server.off("listening", onListening);
+          reject(err);
+        };
+        const onListening = () => {
+          server.off("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(PORT);
+      });
+      if (attempt > 0) {
+        console.warn(`Bound port ${PORT} after ${attempt + 1} attempt(s)`);
+      }
+      return server;
+    } catch (err) {
+      lastError = err;
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EADDRINUSE") {
+        throw err;
+      }
+      if (attempt === 0 || attempt % 5 === 4) {
+        console.warn(
+          `Port ${PORT} in use (attempt ${attempt + 1}/40) — waiting for previous server to exit…`,
+        );
+      }
+      await sleep(250);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Port ${PORT} still in use after retries`);
+}
+
+function attachWebSocket(server: HttpServer): WebSocketServer {
+  const wss = new WebSocketServer({ server, path: "/ws" });
+
+  wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
+    const ctx: SocketContext = {
+      connectionId: crypto.randomUUID(),
+      sessionId: null,
+      localParticipantId: null,
+    };
+
+    ws.on("message", (raw) => {
+      void (async () => {
+        let msg: ClientToServerMessage;
+        try {
+          msg = JSON.parse(String(raw)) as ClientToServerMessage;
+        } catch {
+          ws.send(JSON.stringify({ type: "session.error", message: "Invalid JSON message" }));
+          return;
+        }
+
+        try {
+          switch (msg.type) {
+            case "session.join": {
+              const session = requireSession(msg.sessionId);
+              const apiKey = msg.apiKey.trim();
+              if (!apiKey) {
+                throw new Error(
+                  "OpenRouter API key required to join. Save your key in settings first.",
+                );
+              }
+              session.secrets.apiKey = apiKey;
+              persistSession(session);
+              const localParticipantId = attachConnection(
+                session,
+                ctx.connectionId,
+                ws,
+                msg.participantId ?? null,
+              );
+              ctx.sessionId = msg.sessionId;
+              ctx.localParticipantId = localParticipantId;
+              ws.send(
+                JSON.stringify({
+                  type: "session.updated",
+                  state: publicState(session, localParticipantId),
+                  localParticipantId,
+                }),
+              );
+              broadcast(session);
+              break;
+            }
+            case "session.start": {
+              if (!ctx.sessionId) {
+                throw new Error("Join a session before starting");
+              }
+              const session = requireSession(ctx.sessionId);
+              const apiKey = msg.apiKey.trim();
+              if (!apiKey) {
+                throw new Error(
+                  "OpenRouter API key required to start. Save your key in settings first.",
+                );
+              }
+              session.secrets.apiKey = apiKey;
+              persistSession(session);
+              await startSession(session);
+              break;
+            }
+            case "session.pause": {
+              if (!ctx.sessionId) {
+                throw new Error("Join a session before pausing");
+              }
+              pauseSession(requireSession(ctx.sessionId));
+              break;
+            }
+            case "session.resume": {
+              if (!ctx.sessionId) {
+                throw new Error("Join a session before resuming");
+              }
+              const session = requireSession(ctx.sessionId);
+              const apiKey = msg.apiKey.trim();
+              if (!apiKey) {
+                throw new Error(
+                  "OpenRouter API key required to resume. Save your key in settings first.",
+                );
+              }
+              session.secrets.apiKey = apiKey;
+              persistSession(session);
+              await resumeSession(session);
+              break;
+            }
+            case "action.submit": {
+              if (!ctx.sessionId) {
+                throw new Error("Join a session before submitting actions");
+              }
+              if (!ctx.localParticipantId) {
+                throw new Error("Only a bound human participant can submit actions");
+              }
+              await submitAction(
+                requireSession(ctx.sessionId),
+                ctx.localParticipantId,
+                msg.action,
+              );
+              break;
+            }
+            case "poker.nextHand": {
+              if (!ctx.sessionId) {
+                throw new Error("Join a session before dealing the next hand");
+              }
+              await continuePokerNextHand(requireSession(ctx.sessionId));
+              break;
+            }
+            case "rpg.advance": {
+              if (!ctx.sessionId) {
+                throw new Error("Join a session before advancing");
+              }
+              await advanceRpgSession(requireSession(ctx.sessionId));
+              break;
+            }
+            default: {
+              const exhaustive: never = msg;
+              throw new Error(`Unhandled message: ${(exhaustive as { type: string }).type}`);
+            }
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          ws.send(JSON.stringify({ type: "session.error", message }));
+        }
+      })();
+    });
+
+    ws.on("close", () => {
+      if (!ctx.sessionId) {
         return;
       }
-
-      try {
-        switch (msg.type) {
-          case "session.join": {
-            const session = requireSession(msg.sessionId);
-            const apiKey = msg.apiKey.trim();
-            if (!apiKey) {
-              throw new Error(
-                "OpenRouter API key required to join. Save your key in settings first.",
-              );
-            }
-            session.secrets.apiKey = apiKey;
-            persistSession(session);
-            const localParticipantId = attachConnection(
-              session,
-              ctx.connectionId,
-              ws,
-              msg.participantId ?? null,
-            );
-            ctx.sessionId = msg.sessionId;
-            ctx.localParticipantId = localParticipantId;
-            ws.send(
-              JSON.stringify({
-                type: "session.updated",
-                state: publicState(session, localParticipantId),
-                localParticipantId,
-              }),
-            );
-            broadcast(session);
-            break;
-          }
-          case "session.start": {
-            if (!ctx.sessionId) {
-              throw new Error("Join a session before starting");
-            }
-            const session = requireSession(ctx.sessionId);
-            const apiKey = msg.apiKey.trim();
-            if (!apiKey) {
-              throw new Error(
-                "OpenRouter API key required to start. Save your key in settings first.",
-              );
-            }
-            session.secrets.apiKey = apiKey;
-            persistSession(session);
-            await startSession(session);
-            break;
-          }
-          case "session.pause": {
-            if (!ctx.sessionId) {
-              throw new Error("Join a session before pausing");
-            }
-            pauseSession(requireSession(ctx.sessionId));
-            break;
-          }
-          case "session.resume": {
-            if (!ctx.sessionId) {
-              throw new Error("Join a session before resuming");
-            }
-            const session = requireSession(ctx.sessionId);
-            const apiKey = msg.apiKey.trim();
-            if (!apiKey) {
-              throw new Error(
-                "OpenRouter API key required to resume. Save your key in settings first.",
-              );
-            }
-            session.secrets.apiKey = apiKey;
-            persistSession(session);
-            await resumeSession(session);
-            break;
-          }
-          case "action.submit": {
-            if (!ctx.sessionId) {
-              throw new Error("Join a session before submitting actions");
-            }
-            if (!ctx.localParticipantId) {
-              throw new Error("Only a bound human participant can submit actions");
-            }
-            await submitAction(
-              requireSession(ctx.sessionId),
-              ctx.localParticipantId,
-              msg.action,
-            );
-            break;
-          }
-          default: {
-            const exhaustive: never = msg;
-            throw new Error(`Unhandled message: ${(exhaustive as { type: string }).type}`);
-          }
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        ws.send(JSON.stringify({ type: "session.error", message }));
+      const session = getSession(ctx.sessionId);
+      if (!session) {
+        return;
       }
-    })();
+      detachConnection(session, ctx.connectionId);
+      broadcast(session);
+    });
   });
 
-  ws.on("close", () => {
-    if (!ctx.sessionId) {
+  return wss;
+}
+
+function installShutdown(server: HttpServer, wss: WebSocketServer): void {
+  let shuttingDown = false;
+
+  const shutdown = () => {
+    if (shuttingDown) {
       return;
     }
-    const session = getSession(ctx.sessionId);
-    if (!session) {
-      return;
+    shuttingDown = true;
+    for (const client of wss.clients) {
+      client.terminate();
     }
-    detachConnection(session, ctx.connectionId);
-    broadcast(session);
-  });
+    wss.close();
+    server.close(() => {
+      closeDatabase();
+      process.exit(0);
+    });
+    // Force-exit if close hangs (Windows watch restarts).
+    setTimeout(() => {
+      closeDatabase();
+      process.exit(0);
+    }, 1500).unref();
+  };
+
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) {
+    process.once(signal, shutdown);
+  }
+}
+
+async function main(): Promise<void> {
+  const server = await listenWithRetry();
+  const wss = attachWebSocket(server);
+  installShutdown(server, wss);
+  console.log(`LlmTable server listening on http://localhost:${PORT}`);
+}
+
+void main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  closeDatabase();
+  process.exit(1);
 });

@@ -3,6 +3,7 @@ export type {
   SessionId,
   ParticipantKind,
   SessionPhase,
+  TableRole,
   PersonaDefinition,
   Participant,
   ChatMessage,
@@ -11,6 +12,13 @@ export type {
   PersonaDraft,
   CreateSessionRequest,
 } from "./types.js";
+
+export type {
+  AdventureSeed,
+  AdventureSeedLocation,
+  AdventureSeedNpc,
+  AdventureSeedClock,
+} from "./adventure.js";
 
 export type {
   ClientToServerMessage,
@@ -27,5 +35,5 @@ export type {
   TurnGenerationContext,
 } from "./module.js";
 
-export { extractXmlTag, requireXmlTag } from "./xml.js";
+export { extractXmlTag, requireXmlTag, stripMarkdownFences } from "./xml.js";
 

@@ -28,8 +28,8 @@ export const pokerModule: GameModule = {
 
 export { createPokerRules, createPokerCoordinator, generatePokerLlmTurn };
 export type { PokerState } from "./types.js";
-export { isPokerState } from "./types.js";
-export { legalActions } from "./engine.js";
+export { isAwaitingNextHand, isPokerState } from "./types.js";
+export { continueToNextHand, legalActions } from "./engine.js";
 export { formatCard, formatCards } from "./cards.js";
 export type { Card, Rank, Suit } from "./cards.js";
 

@@ -5,7 +5,9 @@ import {
   DEFAULT_BIG_BLIND,
   DEFAULT_SMALL_BLIND,
   DEFAULT_STACK,
+  gloatQueue,
   type PokerPlayerState,
+  type PokerPlayerStatus,
   type PokerState,
   type PokerStreet,
   type PokerWinner,
@@ -42,12 +44,42 @@ export function nextActiveIndex(poker: PokerState, fromIndex: number): number | 
   return null;
 }
 
+/** Still in the current hand (not folded / eliminated). */
 function contenders(poker: PokerState): PokerPlayerState[] {
-  return poker.players.filter((p) => p.status !== "folded");
+  return poker.players.filter((p) => p.status === "active" || p.status === "allIn");
 }
 
 function activeCanAct(poker: PokerState): PokerPlayerState[] {
   return poker.players.filter((p) => p.status === "active");
+}
+
+function playersWithChips(poker: PokerState): PokerPlayerState[] {
+  return poker.players.filter((p) => p.stack > 0);
+}
+
+/** Next seat with chips, walking forward from fromIndex (exclusive). */
+function nextInChipIndex(players: PokerPlayerState[], fromIndex: number): number {
+  const n = players.length;
+  for (let offset = 1; offset <= n; offset += 1) {
+    const idx = (fromIndex + offset) % n;
+    if (players[idx].stack > 0) {
+      return idx;
+    }
+  }
+  throw new Error("No players with chips remaining");
+}
+
+/** After a pot is awarded, anyone at 0 chips is eliminated from the table. */
+function markBustedPlayersOut(poker: PokerState): void {
+  for (const p of poker.players) {
+    if (p.stack <= 0) {
+      p.stack = 0;
+      p.status = "out";
+      p.holeCards = [];
+      p.betThisStreet = 0;
+      p.hasActedThisStreet = true;
+    }
+  }
 }
 
 function bettingRoundComplete(poker: PokerState): boolean {
@@ -98,11 +130,56 @@ export function createInitialPokerState(participants: Participant[]): PokerState
     })),
     handNumber: 0,
     winners: [],
+    pendingGloatIds: [],
+    awaitingNextHand: false,
     lastActionSummary: null,
   };
 }
 
 export function startNewHand(poker: PokerState): PokerState {
+  const players: PokerPlayerState[] = poker.players.map((p) => {
+    const out = p.stack <= 0;
+    const status: PokerPlayerStatus = out ? "out" : "active";
+    return {
+      ...p,
+      stack: out ? 0 : p.stack,
+      holeCards: [],
+      betThisStreet: 0,
+      contributed: 0,
+      status,
+      hasActedThisStreet: out,
+    };
+  });
+
+  const withChips = players.filter((p) => p.stack > 0);
+  if (withChips.length < 2) {
+    return {
+      ...poker,
+      street: "betweenHands",
+      deck: [],
+      communityCards: [],
+      pot: 0,
+      currentBet: 0,
+      minRaise: poker.bigBlind,
+      winners: [],
+      pendingGloatIds: [],
+      awaitingNextHand: false,
+      lastActionSummary: "Not enough chips to continue",
+      handNumber: poker.handNumber,
+      players,
+      actingParticipantId: null,
+    };
+  }
+
+  const dealer =
+    poker.handNumber === 0
+      ? players.findIndex((p) => p.stack > 0)
+      : nextInChipIndex(players, poker.dealerSeatIndex);
+
+  const inCount = withChips.length;
+  const sbIndex = inCount === 2 ? dealer : nextInChipIndex(players, dealer);
+  const bbIndex = inCount === 2 ? nextInChipIndex(players, dealer) : nextInChipIndex(players, sbIndex);
+
   const next: PokerState = {
     ...poker,
     street: "preflop",
@@ -112,30 +189,14 @@ export function startNewHand(poker: PokerState): PokerState {
     currentBet: 0,
     minRaise: poker.bigBlind,
     winners: [],
+    pendingGloatIds: [],
+    awaitingNextHand: false,
     lastActionSummary: null,
     handNumber: poker.handNumber + 1,
-    dealerSeatIndex:
-      poker.handNumber === 0 ? 0 : (poker.dealerSeatIndex + 1) % poker.players.length,
-    players: poker.players.map((p) => ({
-      ...p,
-      holeCards: [],
-      betThisStreet: 0,
-      contributed: 0,
-      status: p.stack > 0 ? "active" : "folded",
-      hasActedThisStreet: false,
-    })),
+    dealerSeatIndex: dealer,
+    players,
     actingParticipantId: null,
   };
-
-  const withChips = next.players.filter((p) => p.stack > 0);
-  if (withChips.length < 2) {
-    return {
-      ...next,
-      street: "betweenHands",
-      actingParticipantId: null,
-      lastActionSummary: "Not enough chips to continue",
-    };
-  }
 
   for (let round = 0; round < 2; round += 1) {
     for (const p of next.players) {
@@ -149,11 +210,6 @@ export function startNewHand(poker: PokerState): PokerState {
     }
   }
 
-  const n = next.players.length;
-  const dealer = next.dealerSeatIndex;
-  const sbIndex = n === 2 ? dealer : (dealer + 1) % n;
-  const bbIndex = n === 2 ? (dealer + 1) % n : (dealer + 2) % n;
-
   commitChips(next.players[sbIndex], next.smallBlind, next);
   commitChips(next.players[bbIndex], next.bigBlind, next);
   next.currentBet = Math.max(
@@ -162,13 +218,14 @@ export function startNewHand(poker: PokerState): PokerState {
   );
   next.minRaise = next.bigBlind;
 
-  const firstIndex = n === 2 ? dealer : (bbIndex + 1) % n;
+  // Heads-up: dealer/SB acts first preflop. Otherwise: first in-chip seat after BB.
+  const firstIndex = inCount === 2 ? dealer : nextInChipIndex(next.players, bbIndex);
   let acting = firstIndex;
-  for (let i = 0; i < n; i += 1) {
+  for (let i = 0; i < next.players.length; i += 1) {
     if (next.players[acting].status === "active") {
       break;
     }
-    acting = (acting + 1) % n;
+    acting = nextInChipIndex(next.players, acting);
   }
   next.actingParticipantId = next.players[acting].participantId;
   next.lastActionSummary = `Hand #${next.handNumber} dealt. Blinds posted.`;
@@ -211,9 +268,12 @@ function awardPot(poker: PokerState, winners: PokerWinner[]): void {
     playerById(poker, w.participantId).stack += w.amount;
   }
   poker.winners = winners;
+  poker.pendingGloatIds = winners.map((w) => w.participantId);
+  poker.awaitingNextHand = false;
   poker.pot = 0;
   poker.actingParticipantId = null;
   poker.street = "betweenHands";
+  markBustedPlayersOut(poker);
 }
 
 function resolveShowdown(poker: PokerState): void {
@@ -451,10 +511,27 @@ export function maybeStartNextHand(poker: PokerState): PokerState {
   if (poker.street !== "betweenHands") {
     return poker;
   }
-  if (poker.players.filter((p) => p.stack > 0).length < 2) {
+  if (playersWithChips(poker).length < 2) {
     return poker;
   }
   return startNewHand(poker);
+}
+
+/** Deal the next hand after the between-hands review pause. */
+export function continueToNextHand(poker: PokerState): PokerState {
+  if (poker.street !== "betweenHands") {
+    throw new Error("Can only deal the next hand between hands");
+  }
+  if (gloatQueue(poker).length > 0) {
+    throw new Error("Winners are still taking their celebration beat");
+  }
+  if (!poker.awaitingNextHand) {
+    throw new Error("Table is not waiting for a next-hand confirmation");
+  }
+  if (playersWithChips(poker).length < 2) {
+    throw new Error("Not enough chips to deal another hand");
+  }
+  return startNewHand({ ...poker, awaitingNextHand: false });
 }
 
 export function redactPokerState(poker: PokerState, viewerId: ParticipantId | null): PokerState {

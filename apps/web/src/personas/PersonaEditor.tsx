@@ -31,7 +31,6 @@ export function PersonaEditor({
   onChange,
   onInvitedChange,
 }: PersonaEditorProps) {
-  const defaultModel = models[0]?.id ?? "";
   const invitedSet = new Set(invitedIds);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [portraitError, setPortraitError] = useState<string | null>(null);
@@ -57,7 +56,8 @@ export function PersonaEditor({
   }
 
   function addPersona(): void {
-    const persona = emptyPersona(defaultModel);
+    const lastModel = personas[personas.length - 1]?.model.trim();
+    const persona = emptyPersona(lastModel || models[0]?.id || "");
     onChange([...personas, persona]);
     onInvitedChange([...invitedIds, persona.id]);
   }

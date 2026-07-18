@@ -325,6 +325,8 @@ export function App() {
                 });
               }}
               onStop={leaveSession}
+              onNextHand={() => socketRef.current.send({ type: "poker.nextHand" })}
+              onAdvance={() => socketRef.current.send({ type: "rpg.advance" })}
             />
           </div>
         )}
