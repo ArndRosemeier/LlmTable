@@ -39,6 +39,47 @@ export async function fetchModels(apiKey: string): Promise<OpenRouterModel[]> {
   return data.models;
 }
 
+export async function fetchImageModels(apiKey: string): Promise<OpenRouterModel[]> {
+  const response = await fetch("/api/image-models", {
+    headers: {
+      "X-OpenRouter-Key": apiKey,
+    },
+  });
+
+  const data = await readJson<{ models?: OpenRouterModel[]; error?: string }>(response);
+  if (!response.ok) {
+    throw new Error(data.error ?? `Failed to load image models (${response.status})`);
+  }
+  if (!data.models) {
+    throw new Error("Image models response missing models array");
+  }
+  return data.models;
+}
+
+export async function generatePersonaPortrait(params: {
+  apiKey: string;
+  model: string;
+  displayName: string;
+  systemPrompt: string;
+}): Promise<string> {
+  const response = await fetch("/api/personas/portrait", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      apiKey: params.apiKey,
+      model: params.model,
+      displayName: params.displayName,
+      systemPrompt: params.systemPrompt,
+    }),
+  });
+
+  const data = await readJson<{ portraitDataUrl?: string; error?: string }>(response);
+  if (!response.ok || !data.portraitDataUrl) {
+    throw new Error(data.error ?? `Failed to generate portrait (${response.status})`);
+  }
+  return data.portraitDataUrl;
+}
+
 export async function createSession(request: CreateSessionRequest): Promise<{
   sessionId: SessionId;
   state: TableState;

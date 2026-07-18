@@ -148,6 +148,9 @@ export function createSession(request: CreateSessionRequest): {
     persona: {
       systemPrompt: p.systemPrompt.trim(),
       model: p.model.trim(),
+      ...(p.portraitDataUrl?.trim()
+        ? { portraitDataUrl: p.portraitDataUrl.trim() }
+        : {}),
     },
     seatIndex: index,
   }));

@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { OpenRouterModel, ParticipantId, TableState } from "@llm-table/shared";
-import { fetchModels, fetchSession } from "./lib/api";
+import { fetchImageModels, fetchModels, fetchSession } from "./lib/api";
 import {
   clearActiveSession,
   loadActiveSession,
   loadApiKey,
   loadCoordinatorModel,
+  loadImageModel,
   saveActiveSession,
   saveApiKey,
   saveCoordinatorModel,
+  saveImageModel,
 } from "./lib/storage";
 import { SessionSocket } from "./lib/sessionSocket";
 import { Lobby } from "./lobby/Lobby";
@@ -19,7 +21,9 @@ export function App() {
   const [settingsReady, setSettingsReady] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [coordinatorModel, setCoordinatorModel] = useState("");
+  const [imageModel, setImageModel] = useState("");
   const [models, setModels] = useState<OpenRouterModel[]>([]);
+  const [imageModels, setImageModels] = useState<OpenRouterModel[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -77,13 +81,18 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [key, model] = await Promise.all([loadApiKey(), loadCoordinatorModel()]);
+      const [key, model, imgModel] = await Promise.all([
+        loadApiKey(),
+        loadCoordinatorModel(),
+        loadImageModel(),
+      ]);
       if (cancelled) {
         return;
       }
       // Never clobber a key the user already typed/saved in this session.
       setApiKey((current) => (userEditedApiKeyRef.current || current.trim() ? current : key));
       setCoordinatorModel((current) => (current.trim() ? current : model));
+      setImageModel((current) => (current.trim() ? current : imgModel));
       setSettingsReady(true);
     })();
     return () => {
@@ -142,14 +151,19 @@ export function App() {
   const reloadModels = useCallback(async (key: string) => {
     if (!key.trim()) {
       setModels([]);
+      setImageModels([]);
       setModelsError("Enter an API key to load models");
       return;
     }
     setLoadingModels(true);
     setModelsError(null);
     try {
-      const list = await fetchModels(key.trim());
+      const [list, imageList] = await Promise.all([
+        fetchModels(key.trim()),
+        fetchImageModels(key.trim()),
+      ]);
       setModels(list);
+      setImageModels(imageList);
       setCoordinatorModel((current) => {
         if (current) {
           return current;
@@ -160,8 +174,19 @@ export function App() {
         }
         return first;
       });
+      setImageModel((current) => {
+        if (current && imageList.some((m) => m.id === current)) {
+          return current;
+        }
+        const first = imageList[0]?.id ?? "";
+        if (first) {
+          void saveImageModel(first);
+        }
+        return first;
+      });
     } catch (err) {
       setModels([]);
+      setImageModels([]);
       setModelsError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingModels(false);
@@ -188,6 +213,7 @@ export function App() {
     userEditedApiKeyRef.current = true;
     await saveApiKey(trimmed);
     await saveCoordinatorModel(coordinatorModel);
+    await saveImageModel(imageModel);
     setApiKey(trimmed);
     apiKeyRef.current = trimmed;
     setSavedFlash(true);
@@ -231,7 +257,9 @@ export function App() {
         <OpenRouterSettings
           apiKey={apiKey}
           coordinatorModel={coordinatorModel}
+          imageModel={imageModel}
           models={models}
+          imageModels={imageModels}
           loadingModels={loadingModels}
           savedFlash={savedFlash}
           onApiKeyChange={(value) => {
@@ -241,6 +269,10 @@ export function App() {
           onCoordinatorModelChange={(id) => {
             setCoordinatorModel(id);
             void saveCoordinatorModel(id);
+          }}
+          onImageModelChange={(id) => {
+            setImageModel(id);
+            void saveImageModel(id);
           }}
           onSave={() => {
             void handleSaveSettings();
@@ -258,6 +290,7 @@ export function App() {
           <Lobby
             apiKey={apiKey}
             coordinatorModel={coordinatorModel}
+            imageModel={imageModel}
             models={models}
             modelsError={null}
             onSessionCreated={handleSessionCreated}

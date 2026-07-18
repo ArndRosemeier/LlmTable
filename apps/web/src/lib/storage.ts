@@ -7,6 +7,7 @@ const LOBBY_STORE = "lobby";
 
 const KEY_API = "openrouter.apiKey";
 const KEY_COORDINATOR_MODEL = "openrouter.coordinatorModel";
+const KEY_IMAGE_MODEL = "openrouter.imageModel";
 const KEY_LOBBY_DRAFT = "draft";
 const KEY_ACTIVE_SESSION = "activeSession";
 
@@ -177,6 +178,16 @@ export async function loadCoordinatorModel(): Promise<string> {
 export async function saveCoordinatorModel(model: string): Promise<void> {
   await ensureMigrated();
   await setSetting(KEY_COORDINATOR_MODEL, model);
+}
+
+export async function loadImageModel(): Promise<string> {
+  await ensureMigrated();
+  return getSetting(KEY_IMAGE_MODEL);
+}
+
+export async function saveImageModel(model: string): Promise<void> {
+  await ensureMigrated();
+  await setSetting(KEY_IMAGE_MODEL, model);
 }
 
 export async function loadLobbyDraft(): Promise<LobbyDraft | null> {

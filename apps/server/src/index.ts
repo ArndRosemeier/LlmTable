@@ -4,7 +4,13 @@ import { cors } from "hono/cors";
 import type { CreateSessionRequest, ClientToServerMessage } from "@llm-table/shared";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
-import { listModels, OpenRouterError } from "./openrouter.js";
+import {
+  buildPersonaPortraitPrompt,
+  generateImage,
+  listImageModels,
+  listModels,
+  OpenRouterError,
+} from "./openrouter.js";
 import {
   attachConnection,
   broadcast,
@@ -42,21 +48,84 @@ app.get("/api/health", (c) => c.json({ ok: true }));
 
 app.get("/api/modules", (c) => c.json({ modules: listModules() }));
 
-app.get("/api/models", async (c) => {
+function openRouterKeyFromRequest(c: {
+  req: { header: (name: string) => string | undefined };
+}): string | null {
   const apiKey =
     c.req.header("X-OpenRouter-Key") ??
     c.req.header("Authorization")?.replace(/^Bearer\s+/i, "");
+  return apiKey?.trim() ? apiKey.trim() : null;
+}
 
-  if (!apiKey?.trim()) {
+app.get("/api/models", async (c) => {
+  const apiKey = openRouterKeyFromRequest(c);
+  if (!apiKey) {
     return c.json({ error: "OpenRouter API key required (X-OpenRouter-Key header)" }, 400);
   }
 
   try {
-    const models = await listModels(apiKey.trim());
+    const models = await listModels(apiKey);
     return c.json({ models });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = err instanceof OpenRouterError && err.status === 401 ? 401 : 502;
+    return c.json({ error: message }, status);
+  }
+});
+
+app.get("/api/image-models", async (c) => {
+  const apiKey = openRouterKeyFromRequest(c);
+  if (!apiKey) {
+    return c.json({ error: "OpenRouter API key required (X-OpenRouter-Key header)" }, 400);
+  }
+
+  try {
+    const models = await listImageModels(apiKey);
+    return c.json({ models });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = err instanceof OpenRouterError && err.status === 401 ? 401 : 502;
+    return c.json({ error: message }, status);
+  }
+});
+
+app.post("/api/personas/portrait", async (c) => {
+  let body: {
+    apiKey?: string;
+    model?: string;
+    displayName?: string;
+    systemPrompt?: string;
+  };
+  try {
+    body = (await c.req.json()) as typeof body;
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  const apiKey = body.apiKey?.trim() || openRouterKeyFromRequest(c);
+  if (!apiKey) {
+    return c.json({ error: "OpenRouter API key required" }, 400);
+  }
+
+  const model = body.model?.trim() ?? "";
+  const displayName = body.displayName?.trim() ?? "";
+  const systemPrompt = body.systemPrompt?.trim() ?? "";
+
+  try {
+    const prompt = buildPersonaPortraitPrompt(displayName, systemPrompt);
+    const { dataUrl } = await generateImage({
+      apiKey,
+      model,
+      prompt,
+      aspectRatio: "1:1",
+    });
+    return c.json({ portraitDataUrl: dataUrl });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const status =
+      err instanceof OpenRouterError && (err.status === 401 || err.status === 400)
+        ? err.status
+        : 502;
     return c.json({ error: message }, status);
   }
 });

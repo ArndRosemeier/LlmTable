@@ -26,6 +26,7 @@ function defaultPersonas(defaultModel: string): PersonaDraft[] {
 export interface LobbyProps {
   apiKey: string;
   coordinatorModel: string;
+  imageModel: string;
   models: OpenRouterModel[];
   modelsError: string | null;
   onSessionCreated: (payload: {
@@ -38,6 +39,7 @@ export interface LobbyProps {
 export function Lobby({
   apiKey,
   coordinatorModel,
+  imageModel,
   models,
   modelsError,
   onSessionCreated,
@@ -201,6 +203,8 @@ export function Lobby({
         personas={personas}
         invitedIds={invitedIds}
         models={models}
+        apiKey={apiKey}
+        imageModel={imageModel}
         onChange={setPersonas}
         onInvitedChange={setInvitedIds}
       />

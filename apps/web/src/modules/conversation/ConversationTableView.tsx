@@ -117,6 +117,13 @@ export function ConversationTableView({
               className={active ? "seat seat-active" : "seat"}
               style={{ left: pos.left, top: pos.top }}
             >
+              {p.persona?.portraitDataUrl ? (
+                <img
+                  className="seat-portrait"
+                  src={p.persona.portraitDataUrl}
+                  alt=""
+                />
+              ) : null}
               <span className="seat-name">{p.displayName}</span>
               <span className="seat-kind">{p.kind === "human" ? "Human" : "LLM"}</span>
             </div>

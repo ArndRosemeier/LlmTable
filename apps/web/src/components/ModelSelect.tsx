@@ -9,6 +9,11 @@ export interface ModelSelectProps {
   placeholder?: string;
 }
 
+function modelOptionLabel(model: OpenRouterModel): string {
+  const title = model.name.trim() || model.id;
+  return model.priceLabel ? `${title} · ${model.priceLabel}` : title;
+}
+
 export function ModelSelect({
   models,
   value,
@@ -23,9 +28,10 @@ export function ModelSelect({
     if (!q) {
       return models;
     }
-    return models.filter(
-      (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q),
-    );
+    return models.filter((m) => {
+      const haystack = [m.id, m.name, m.priceLabel ?? ""].join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
   }, [filter, models]);
 
   return (
@@ -46,7 +52,7 @@ export function ModelSelect({
         <option value="">{placeholder}</option>
         {filtered.map((m) => (
           <option key={m.id} value={m.id}>
-            {m.id}
+            {modelOptionLabel(m)}
           </option>
         ))}
       </select>

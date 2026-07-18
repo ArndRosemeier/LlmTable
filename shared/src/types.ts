@@ -6,6 +6,8 @@ export type SessionPhase = "lobby" | "running" | "paused";
 export interface PersonaDefinition {
   systemPrompt: string;
   model: string;
+  /** data:image/...;base64,... portrait, when generated */
+  portraitDataUrl?: string;
 }
 
 export interface Participant {
@@ -42,6 +44,8 @@ export interface OpenRouterModel {
   id: string;
   name: string;
   contextLength?: number;
+  /** Short price summary for selectors, e.g. "$0.15/$0.60 per 1M" or "$0.04/image" */
+  priceLabel?: string;
 }
 
 export interface PersonaDraft {
@@ -49,6 +53,8 @@ export interface PersonaDraft {
   displayName: string;
   systemPrompt: string;
   model: string;
+  /** data:image/...;base64,... portrait, when generated */
+  portraitDataUrl?: string;
 }
 
 export interface CreateSessionRequest {
