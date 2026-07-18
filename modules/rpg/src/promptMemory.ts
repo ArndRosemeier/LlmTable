@@ -66,6 +66,7 @@ export function normalizeRpgState(rpg: RpgState): RpgState {
   const advanceMode =
     mode === "preparing" ||
     mode === "ready" ||
+    mode === "revealing" ||
     mode === "awaiting_human" ||
     mode === "idle"
       ? mode

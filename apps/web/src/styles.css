@@ -847,6 +847,11 @@ select {
   font-size: clamp(0.95rem, 1.3vw, 1.05rem);
 }
 
+.rpg-advance-bar .btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .seat-preparing-host {
   z-index: 4;
 }

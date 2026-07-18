@@ -50,7 +50,8 @@ interface RuntimeSession {
   turnGeneration: number;
   waitingForHuman: ParticipantId | null;
   rpgPrefetch: RpgPrefetchSlot | null;
-  rpgAdvanceLock: boolean;
+  /** Coalesces concurrent Next presses onto one in-flight advance. */
+  rpgAdvanceInFlight: Promise<void> | null;
 }
 
 function formatByteCount(bytes: number): string {
@@ -233,13 +234,14 @@ function buildSessionFromRequest(request: CreateSessionRequest): RuntimeSession 
     turnGeneration: 0,
     waitingForHuman: null,
     rpgPrefetch: null,
-    rpgAdvanceLock: false,
+    rpgAdvanceInFlight: null,
   };
 }
 
 function restoreStateAfterRestart(state: TableState): TableState {
+  let next: TableState = state;
   if (state.phase === "running") {
-    return {
+    next = {
       ...state,
       phase: "paused",
       activeSpeakerId: null,
@@ -247,7 +249,11 @@ function restoreStateAfterRestart(state: TableState): TableState {
       error: null,
     };
   }
-  return state;
+  // Prefetch is runtime-only — never keep a stale ready/revealing advance after reload.
+  if (isRpgState(next.moduleState)) {
+    next = withRpgAdvance(next, { speakerId: null, mode: "idle" });
+  }
+  return next;
 }
 
 export class LocalSessionController {
@@ -266,8 +272,20 @@ export class LocalSessionController {
     };
   }
 
+  /**
+   * Viewer-facing state (hole cards / GM secrets redacted).
+   * Game logic must use `session.state` internally — never this getter.
+   */
   get state(): TableState | null {
-    return this.session?.state ?? null;
+    const session = this.session;
+    if (!session) {
+      return null;
+    }
+    const redact = getModule(session.state.moduleId).redactState;
+    if (!redact) {
+      return session.state;
+    }
+    return redact(session.state, session.humanParticipantId);
   }
 
   get humanParticipantId(): ParticipantId | null {
@@ -343,7 +361,7 @@ export class LocalSessionController {
       turnGeneration: 0,
       waitingForHuman: null,
       rpgPrefetch: null,
-      rpgAdvanceLock: false,
+      rpgAdvanceInFlight: null,
     };
     this.errorMessage = null;
 
@@ -534,7 +552,19 @@ export class LocalSessionController {
   }
 
   async advanceRpg(): Promise<void> {
-    await this.advanceRpgSession();
+    const session = this.requireWritableSession();
+    if (session.rpgAdvanceInFlight) {
+      await session.rpgAdvanceInFlight;
+      return;
+    }
+
+    const run = this.advanceRpgSession().finally(() => {
+      if (session.rpgAdvanceInFlight === run) {
+        session.rpgAdvanceInFlight = null;
+      }
+    });
+    session.rpgAdvanceInFlight = run;
+    await run;
   }
 
   async continuePokerNextHand(): Promise<void> {
@@ -1195,33 +1225,40 @@ export class LocalSessionController {
     if (!isRpgState(session.state.moduleState)) {
       throw new Error("RPG moduleState is missing or invalid");
     }
-    if (session.rpgAdvanceLock) {
-      return;
-    }
 
     const rpg = normalizeRpgState(session.state.moduleState);
     if (rpg.advance.mode === "awaiting_human") {
+      throw new Error("Waiting for your line — speak or lower your hand before Next");
+    }
+    if (rpg.advance.mode === "revealing") {
+      return;
+    }
+    if (rpg.advance.mode === "idle") {
       throw new Error("Nothing ready to advance yet");
     }
-    if (rpg.advance.mode === "idle" || !rpg.advance.speakerId) {
+    if (rpg.advance.mode === "preparing" && !rpg.advance.speakerId) {
+      throw new Error("Still choosing who acts next — try again in a moment");
+    }
+    if (!rpg.advance.speakerId) {
       throw new Error("Nothing ready to advance yet");
     }
 
-    session.rpgAdvanceLock = true;
+    const speakerId = rpg.advance.speakerId;
+    const speaker = findParticipant(session.state, speakerId);
+    const generation = session.turnGeneration;
+
+    session.state = {
+      ...withRpgAdvance(session.state, { speakerId, mode: "revealing" }),
+      activeSpeakerId: speakerId,
+      statusMessage: `Revealing ${speaker.displayName}…`,
+      error: null,
+    };
+    await this.emit(true);
+
     try {
-      const speakerId = rpg.advance.speakerId;
-      const speaker = findParticipant(session.state, speakerId);
-      const generation = session.turnGeneration;
       let prefetch = session.rpgPrefetch;
 
       if (!prefetch || prefetch.speakerId !== speakerId || prefetch.generation !== generation) {
-        this.setStatus(`Next: ${speaker.displayName} — preparing…`);
-        session.state = withRpgAdvance(session.state, {
-          speakerId,
-          mode: "preparing",
-        });
-        await this.emit(true);
-
         const promise = this.generateAndEnrichLlmAction(speaker, { generation });
         prefetch = {
           generation,
@@ -1231,6 +1268,8 @@ export class LocalSessionController {
           error: null,
         };
         session.rpgPrefetch = prefetch;
+        this.setStatus(`Next: ${speaker.displayName} — preparing…`);
+        await this.emit(true);
       }
 
       if (!prefetch.action) {
@@ -1239,13 +1278,13 @@ export class LocalSessionController {
         try {
           const action = await prefetch.promise;
           if (session.turnGeneration !== generation || session.state.phase !== "running") {
-            return;
+            throw new Error("Advance was interrupted — press Next again when ready");
           }
           prefetch = { ...prefetch, action };
           session.rpgPrefetch = prefetch;
         } catch (err) {
           if (session.turnGeneration !== generation) {
-            return;
+            throw new Error("Advance was interrupted — press Next again when ready");
           }
           const message = err instanceof Error ? err.message : String(err);
           session.rpgPrefetch = null;
@@ -1257,7 +1296,7 @@ export class LocalSessionController {
             statusMessage: `${speaker.displayName} failed to act`,
           };
           await this.emit(true);
-          return;
+          throw new Error(message);
         }
       }
 
@@ -1284,8 +1323,30 @@ export class LocalSessionController {
       if (session.state.phase === "running") {
         void this.prepareRpgAdvance();
       }
-    } finally {
-      session.rpgAdvanceLock = false;
+    } catch (err) {
+      if (
+        this.session === session &&
+        isRpgState(session.state.moduleState) &&
+        normalizeRpgState(session.state.moduleState).advance.mode === "revealing"
+      ) {
+        session.state = {
+          ...withRpgAdvance(session.state, {
+            speakerId,
+            mode: session.rpgPrefetch?.action ? "ready" : "idle",
+          }),
+          activeSpeakerId: session.rpgPrefetch?.action ? speakerId : null,
+          statusMessage:
+            session.rpgPrefetch?.action != null
+              ? `Next: ${speaker.displayName} — press Next`
+              : "Advance failed — preparing again…",
+          error: err instanceof Error ? err.message : String(err),
+        };
+        await this.emit(true);
+        if (!session.rpgPrefetch?.action && session.state.phase === "running") {
+          void this.prepareRpgAdvance();
+        }
+      }
+      throw err;
     }
   }
 

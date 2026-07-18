@@ -181,6 +181,7 @@ export function RpgTableView({
     localParticipantId !== null &&
     (state.phase === "running" || state.phase === "paused");
   const isPreparing = advance.mode === "preparing";
+  const isRevealing = advance.mode === "revealing";
   const isAwaitingHuman = advance.mode === "awaiting_human";
   const awaitingLocal =
     isAwaitingHuman &&
@@ -190,10 +191,9 @@ export function RpgTableView({
     localParticipantId != null && rpg?.raisedHandParticipantId === localParticipantId;
   const canSignalHand =
     canSpeak && state.phase === "running" && localParticipantId != null;
-  const canAdvance =
-    state.phase === "running" &&
-    typeof onAdvance === "function" &&
-    (isPreparing || advance.mode === "ready");
+  const showAdvanceButton =
+    state.phase === "running" && typeof onAdvance === "function" && !isAwaitingHuman;
+  const canPressNext = showAdvanceButton && advance.mode === "ready" && !isRevealing;
   const nextSpeakerName =
     advance.speakerId != null
       ? (state.participants.find((p) => p.id === advance.speakerId)?.displayName ?? "speaker")
@@ -224,6 +224,16 @@ export function RpgTableView({
       return;
     }
     onAction({ type: "rpg.raiseHand" });
+  }
+
+  function handleAdvanceClick(): void {
+    if (!onAdvance) {
+      return;
+    }
+    if (!canPressNext) {
+      return;
+    }
+    onAdvance();
   }
 
   return (
@@ -400,7 +410,7 @@ export function RpgTableView({
         <div
           className={[
             "rpg-advance-bar",
-            canAdvance && !isPreparing ? "" : "rpg-advance-bar-idle",
+            showAdvanceButton ? "" : "rpg-advance-bar-idle",
           ]
             .filter(Boolean)
             .join(" ")}
@@ -408,12 +418,15 @@ export function RpgTableView({
           <button
             type="button"
             className="btn btn-lg"
-            onClick={onAdvance}
-            disabled={!canAdvance || isPreparing}
-            tabIndex={canAdvance && !isPreparing ? 0 : -1}
-            aria-hidden={!canAdvance || isPreparing}
+            onClick={handleAdvanceClick}
+            disabled={!canPressNext}
+            aria-busy={isRevealing || isPreparing}
           >
-            {`Next${nextSpeakerName ? `: ${nextSpeakerName}` : ""}`}
+            {isRevealing
+              ? `Revealing${nextSpeakerName ? `: ${nextSpeakerName}` : ""}…`
+              : isPreparing
+                ? `Preparing${nextSpeakerName ? `: ${nextSpeakerName}` : ""}…`
+                : `Next${nextSpeakerName ? `: ${nextSpeakerName}` : ""}`}
           </button>
         </div>
       </div>

@@ -64,9 +64,10 @@ export interface RpgAdvanceState {
    * idle — nothing queued
    * preparing — LLM response being built
    * ready — LLM response ready; press Next to reveal
+   * revealing — Next accepted; applying the prefetched line
    * awaiting_human — human must act (no Next)
    */
-  mode: "idle" | "preparing" | "ready" | "awaiting_human";
+  mode: "idle" | "preparing" | "ready" | "revealing" | "awaiting_human";
   /** Present while mode is preparing; cleared when ready/idle. */
   progress?: RpgPreparationProgress;
 }

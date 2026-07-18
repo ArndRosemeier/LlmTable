@@ -365,8 +365,10 @@ export function App() {
               }}
               onAdvance={() => {
                 if (readOnly) {
+                  setSessionError("This session is read-only in this tab");
                   return;
                 }
+                setSessionError(null);
                 void controllerRef.current.advanceRpg().catch((err) => {
                   setSessionError(err instanceof Error ? err.message : String(err));
                 });
